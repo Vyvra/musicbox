@@ -1,0 +1,22 @@
+[Unit]
+Description=Kids music box - play music from a plugged-in USB stick
+Documentation=file:///usr/local/share/musicbox/README.md
+After=sound.target local-fs.target
+Wants=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/musicboxd.py
+Restart=always
+RestartSec=2
+
+# /run/musicbox is both the mount point and where mpv's IPC socket lives.
+RuntimeDirectory=musicbox
+RuntimeDirectoryMode=0755
+
+# Let the handler unmount cleanly and quit mpv before systemd gives up.
+TimeoutStopSec=15
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

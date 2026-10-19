@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""musicboxd - plug a USB stick into the Pi, it plays the music on it.
+
+One long-lived daemon owns everything (udev events, the mount, mpv, the resume
+state), so a child yanking and re-inserting a stick cannot race two processes
+against each other.
+
+Behaviour (agreed, 2026-10-19):
+  * stick inserted  -> play every track, folder by folder, filename order
+  * stick removed   -> pause, remember (stick + track + second)
+  * same stick back -> resume exactly there
+  * playlist played to the end -> forget the position, next plug starts at track 1
+  * a second stick inserted while one plays -> ignored until the first is removed
+"""
+
+import argparse
+import glob
+import json
+import logging
+import os
+import queue
+import re
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+LOG = logging.getLogger("musicboxd")
+
+DEFAULTS = {
+    "MUSIC_EXT": "mp3,m4a,flac,ogg,opus,wav",
+    "VOLUME": "75",              # Amp2 PCM5122 hardware volume, percent; "" = leave alone
+    "AUDIO_DEVICE": "",          # empty = the ALSA default from /etc/asound.conf
+    "MOUNT_POINT": "/run/musicbox",
+    "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
+    "MPV_EXTRA_ARGS": "",      # space-separated, e.g. --ao=null for testing without speakers
+    "STATE_FILE": "/var/lib/musicbox/state.json",
+    "RECONCILE_INTERVAL": "5",   # s, backstop poll in case a udev event is missed
+    "SAVE_INTERVAL": "60",       # s, position checkpoint while playing
+    "MAX_TRACKS": "2000",
+}
+MAX_MOUNT_ATTEMPTS = 3
+
+
+# --------------------------------------------------------------------------- config
+
+def load_config(path=None):
+    path = path or os.environ.get("MUSICBOX_CONFIG", "/etc/musicbox/config")
+    cfg = dict(DEFAULTS)
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                cfg[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return cfg
+
+
+# --------------------------------------------------------------------------- helpers
+
+def natural_key(text):
+    """'track 2' before 'track 10', case-insensitively."""
+    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", text)]
+
+
+def find_usb_partitions():
+    """Partitions of USB mass storage that currently exist in /dev.
+
+    Matched on the sysfs path ('/usb' appears for USB-attached disks), so the
+    SD card the system boots from is never a candidate.
+    """
+    found = []
+    for entry in sorted(glob.glob("/sys/class/block/*")):
+        name = os.path.basename(entry)
+        if not re.fullmatch(r"sd[a-z]+\d+", name):
+            continue
+        if "/usb" not in os.path.realpath(entry):
+            continue
+        dev = "/dev/" + name
+        if os.path.exists(dev):
+            found.append(dev)
+    return found
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def mount_ro(dev, mnt):
+    os.makedirs(mnt, exist_ok=True)
+    res = run(["mount", "-o", "ro,noatime,nodev,nosuid", dev, mnt])
+    if res.returncode != 0:
+        raise OSError(res.stderr.strip() or "mount failed")
+
+
+def umount(mnt):
+    if not os.path.ismount(mnt):
+        return True
+    for _ in range(5):
+        if run(["umount", "-l", mnt]).returncode == 0:
+            return True
+        time.sleep(0.3)
+    LOG.warning("could not unmount %s", mnt)
+    return False
+
+
+def scan_tracks(mnt, extensions):
+    tracks = []
+    for root, dirs, names in os.walk(mnt):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in names:
+            if name.startswith("."):
+                continue
+            if name.rsplit(".", 1)[-1].lower() in extensions:
+                tracks.append(os.path.join(root, name))
+    tracks.sort(key=lambda p: natural_key(os.path.relpath(p, mnt)))
+    return tracks
+
+
+def stick_identity(dev, mnt, tracks):
+    """Stable key for the resume state: filesystem UUID, else a content fingerprint."""
+    res = run(["blkid", "-s", "UUID", "-o", "value", dev])
+    uuid = res.stdout.strip()
+    if uuid:
+        return "uuid:" + uuid
+    res = run(["lsblk", "-dno", "SERIAL", os.path.dirname(dev) or dev])
+    serial = res.stdout.strip()
+    if serial:
+        return "serial:" + serial
+    fingerprint = hashlib_of(tracks, mnt)
+    return "content:" + fingerprint
+
+
+def hashlib_of(tracks, mnt):
+    import hashlib
+    h = hashlib.sha1()
+    for path in tracks:
+        rel = os.path.relpath(path, mnt)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = -1
+        h.update(f"{rel}\0{size}\n".encode("utf-8", "replace"))
+    return h.hexdigest()[:16]
+
+
+def resolve_resume(tracks, mnt, record):
+    """0-based index and seconds to resume at, from a stored {'track','position'}."""
+    if not record or not record.get("track"):
+        return 0, 0.0
+    wanted = os.path.normpath(record["track"])
+    for index, path in enumerate(tracks):
+        if os.path.normpath(os.path.relpath(path, mnt)) == wanted:
+            return index, float(record.get("position") or 0)
+    LOG.info("resume track '%s' is gone, starting at the beginning", wanted)
+    return 0, 0.0
+
+
+def set_volume(percent):
+    """Set the HAT's hardware volume (PCM5122 'Digital'), found by card name."""
+    if not percent:
+        return
+    card = "sndrpihifiberry"
+    for ctl in ("Digital", "PCM", "Master"):
+        res = run(["amixer", "-c", card, "sset", ctl, f"{percent}%", "unmute"])
+        if res.returncode == 0:
+            LOG.info("hardware volume -> %s%% (%s)", percent, ctl)
+            return
+    LOG.warning("no hardware volume control found on card %s", card)
+
+
+# --------------------------------------------------------------------------- mpv IPC
+
+class Mpv:
+    def __init__(self, sock_path, audio_device="", extra_args=""):
+        self.sock_path = sock_path
+        self.audio_device = audio_device
+        self.extra_args = shlex.split(extra_args) if extra_args else []
+        self.proc = None
+        self.sock = None
+        self.buf = b""
+        self.rid = 0
+
+    # -- ipc plumbing
+
+    def _connect(self, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(self.sock_path):
+                try:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.settimeout(5)
+                    s.connect(self.sock_path)
+                    self.sock, self.buf = s, b""
+                    return
+                except OSError:
+                    pass
+            time.sleep(0.05)
+        raise TimeoutError(f"mpv IPC socket did not appear at {self.sock_path}")
+
+    def _readline(self):
+        while b"\n" not in self.buf:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                return None
+            self.buf += chunk
+        line, _, self.buf = self.buf.partition(b"\n")
+        return line
+
+    def call(self, *command):
+        if self.sock is None:
+            self._connect()
+        self.rid += 1
+        try:
+            self.sock.sendall(json.dumps(
+                {"command": list(command), "request_id": self.rid}).encode() + b"\n")
+        except OSError:
+            raise ConnectionError("mpv IPC send failed")
+        while True:
+            line = self._readline()
+            if line is None:
+                raise ConnectionError("mpv IPC closed")
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("request_id") == self.rid:
+                if msg.get("error") not in (None, "success"):
+                    raise ConnectionError(msg.get("error"))
+                return msg.get("data")
+
+    # -- playback
+
+    def start(self, tracks, base_index, resume_pos, max_tracks):
+        os.makedirs(os.path.dirname(self.sock_path), exist_ok=True)
+        if os.path.exists(self.sock_path):
+            os.unlink(self.sock_path)
+        cmd = [
+            "mpv", "--no-config", "--no-video", "--idle=yes", "--terminal=no",
+            "--really-quiet", "--gapless-audio=yes", "--audio-buffer=0.5",
+            f"--input-ipc-server={self.sock_path}",
+        ]
+        if self.audio_device:
+            cmd.append(f"--audio-device={self.audio_device}")
+        cmd.extend(self.extra_args)
+        LOG.info("starting mpv, %d track(s) from #%d", len(tracks), base_index)
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._connect()
+        if not tracks:
+            return
+        window = tracks[:max_tracks]
+        self.call("loadfile", window[0], "replace")
+        if resume_pos > 0.5:
+            self._seek_when_ready(resume_pos)
+        for path in window[1:]:
+            self.call("loadfile", path, "append")
+
+    def _seek_when_ready(self, seconds, timeout=15.0):
+        """mpv 0.41 rejects the 4th (options) argument of loadfile, so seek instead.
+
+        time-pos becomes readable only once the file is actually open, which is a
+        more reliable readiness signal than any 'loaded' property across versions.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if isinstance(self.position(), (int, float)):
+                break
+            time.sleep(0.1)
+        else:
+            LOG.warning("file did not open within %.0fs, not resuming", timeout)
+            return
+        self.call("seek", seconds, "absolute", "exact")
+        LOG.debug("resumed at %.1fs", seconds)
+
+    def position(self):
+        try:
+            return self.call("get_property", "time-pos")
+        except (ConnectionError, TimeoutError):
+            return None
+
+    def playlist_index(self):
+        try:
+            return self.call("get_property", "playlist-pos")
+        except (ConnectionError, TimeoutError):
+            return None
+
+    def idle(self):
+        try:
+            return bool(self.call("get_property", "idle-active"))
+        except (ConnectionError, TimeoutError):
+            return True
+
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def quit(self):
+        try:
+            if self.alive():
+                self.call("quit")
+        except (ConnectionError, TimeoutError, OSError):
+            pass
+        if self.proc is not None:
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                LOG.warning("mpv did not quit, killing it")
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.sock = self.proc = None
+
+
+# --------------------------------------------------------------------------- state
+
+class State:
+    """Per-stick resume positions, keyed by stick identity."""
+
+    def __init__(self, path):
+        self.path = path
+        self.data = {}
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self.path) as fh:
+                self.data = json.load(fh).get("sticks", {})
+        except (FileNotFoundError, ValueError):
+            self.data = {}
+
+    def save(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"sticks": self.data}, fh, indent=1)
+        os.replace(tmp, self.path)
+
+    def get(self, ident):
+        return self.data.get(ident)
+
+    def put(self, ident, track, position):
+        self.data[ident] = {"track": track, "position": round(position, 1),
+                            "updated": int(time.time())}
+        self.save()
+
+    def forget(self, ident):
+        if self.data.pop(ident, None) is not None:
+            self.save()
+
+
+# --------------------------------------------------------------------------- controller
+
+class Stick:
+    def __init__(self, dev, mnt, ident, tracks):
+        self.dev = dev
+        self.mnt = mnt
+        self.ident = ident
+        self.tracks = tracks      # absolute paths, already sorted
+        self.base_index = 0       # absolute index of the first track handed to mpv
+        self.finished = False
+        self.last_pos = 0.0
+        self.last_index = None
+        self.last_save = time.time()
+
+
+class Controller:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.ext = {e.strip().lower() for e in cfg["MUSIC_EXT"].split(",") if e.strip()}
+        self.mnt = cfg["MOUNT_POINT"]
+        self.state = State(cfg["STATE_FILE"])
+        self.stick = None
+        self.player = None
+        self.attempts = {}
+        self.ignored = set()
+
+    # -- public
+
+    def reconcile(self):
+        present = find_usb_partitions()
+        if self.stick and self.stick.dev not in present:
+            self.stop_stick("stick removed")
+        if self.stick is None:
+            for dev in present:
+                if dev in self.ignored:
+                    continue
+                if self.try_start(dev):
+                    break
+        if self.stick:
+            self.monitor()
+
+    def on_shutdown(self, *_):
+        if self.stick:
+            self.stop_stick("shutting down")
+
+    # -- start / stop
+
+    def try_start(self, dev):
+        try:
+            mount_ro(dev, self.mnt)
+        except OSError as exc:
+            self.attempts[dev] = self.attempts.get(dev, 0) + 1
+            if self.attempts[dev] >= MAX_MOUNT_ATTEMPTS:
+                LOG.error("giving up on %s after %d attempts: %s",
+                          dev, self.attempts[dev], exc)
+                self.ignored.add(dev)
+            else:
+                LOG.warning("mount %s failed (%s), will retry", dev, exc)
+            return False
+
+        self.attempts.pop(dev, None)
+        if not self.begin_stick(dev, self.mnt):
+            umount(self.mnt)
+            return False
+        return True
+
+    def begin_stick(self, dev, mnt):
+        """Scan, look up the resume point and start playing. Mount is the caller's job,
+        so --simulate DIR can drive exactly the same code path without a stick."""
+        tracks = scan_tracks(mnt, self.ext)
+        if not tracks:
+            LOG.info("no playable files on %s, ignoring it", dev)
+            self.ignored.add(dev)
+            return False
+
+        ident = stick_identity(dev, mnt, tracks)
+        self.stick = Stick(dev, mnt, ident, tracks)
+        LOG.info("stick %s (%s): %d track(s)", dev, ident, len(tracks))
+
+        resume = self.state.get(ident) or {}
+        start_index, start_pos = resolve_resume(tracks, mnt, resume)
+        if start_pos:
+            LOG.info("resuming '%s' at %.1fs", resume.get("track"), start_pos)
+        self.stick.base_index = start_index
+        set_volume(self.cfg["VOLUME"])
+        self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
+                          self.cfg["MPV_EXTRA_ARGS"])
+        try:
+            self.player.start(tracks[start_index:], start_index, start_pos,
+                              int(self.cfg["MAX_TRACKS"]))
+        except (TimeoutError, ConnectionError, OSError) as exc:
+            LOG.error("could not start playback: %s", exc)
+            self.player.quit()
+            self.player = None
+            self.stick = None
+            self.ignored.add(dev)
+            umount(self.mnt)
+            return False
+        return True
+
+    def stop_stick(self, reason):
+        stick = self.stick
+        if stick is None:
+            return
+        index, pos = self.current_position()
+        LOG.info("stopping (%s) at track #%s, %.1fs", reason, index, pos or 0)
+
+        if stick.finished:
+            # listened all the way through: a later plug-in starts from track 1
+            self.state.forget(stick.ident)
+        elif index is not None:
+            self.state.put(stick.ident,
+                           os.path.relpath(stick.tracks[index], stick.mnt), pos or 0)
+
+        if self.player:
+            self.player.quit()
+        self.player = None
+        umount(stick.mnt)
+        self.stick = None
+
+    # -- while playing
+
+    def current_position(self):
+        """(absolute track index, seconds) as last known."""
+        stick = self.stick
+        if stick is None:
+            return None, None
+        index, pos = stick.last_index, stick.last_pos
+        if self.player and self.player.alive():
+            live_pos = self.player.position()
+            if live_pos is not None:
+                stick.last_pos = pos = live_pos
+            i = self.player.playlist_index()
+            if i is not None and i >= 0:
+                index = stick.base_index + i
+                stick.last_index = index
+        return index, pos
+
+    def monitor(self):
+        stick = self.stick
+        if self.player is None:
+            return
+
+        if not self.player.alive():
+            LOG.error("mpv exited unexpectedly")
+            self.stop_stick("mpv died")
+            return
+
+        index, pos = self.current_position()
+
+        if self.player.idle() and not stick.finished:
+            stick.finished = True
+            LOG.info("playlist finished")
+
+        if not stick.finished and index is not None:
+            if time.time() - stick.last_save >= float(self.cfg["SAVE_INTERVAL"]):
+                self.state.put(stick.ident,
+                               os.path.relpath(stick.tracks[index], stick.mnt), pos or 0)
+                stick.last_save = time.time()
+
+
+# --------------------------------------------------------------------------- udev feed
+
+def udev_events(out_queue, stop_event):
+    """Feed 'something changed on the block subsystem' into the queue."""
+    proc = subprocess.Popen(
+        ["udevadm", "monitor", "--udev", "--property", "--subsystem-match=block"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    try:
+        for line in proc.stdout:
+            if stop_event.is_set():
+                break
+            if line.startswith("UDEV") or line.startswith("KERNEL"):
+                out_queue.put(line.strip())
+    finally:
+        proc.terminate()
+
+
+# --------------------------------------------------------------------------- main
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--demo", metavar="DIR",
+                    help="play a local directory once (no USB, for testing the HAT)")
+    ap.add_argument("--simulate", metavar="DIR",
+                    help="treat a local directory as a stick: exercises scan/resume/state")
+    ap.add_argument("--verbose", "-v", action="store_true")
+    args = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(message)s", stream=sys.stderr)
+
+    cfg = load_config()
+
+    if args.demo:
+        tracks = scan_tracks(os.path.abspath(args.demo), {e.strip().lower() for e in cfg["MUSIC_EXT"].split(",")})
+        if not tracks:
+            LOG.error("no playable files in %s", args.demo)
+            return 1
+        set_volume(cfg["VOLUME"])
+        player = Mpv(cfg["MPV_SOCKET"], cfg["AUDIO_DEVICE"], cfg["MPV_EXTRA_ARGS"])
+        player.start(tracks, 0, 0.0, int(cfg["MAX_TRACKS"]))
+        try:
+            while player.alive() and not player.idle():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            player.quit()
+        return 0
+
+    controller = Controller(cfg)
+
+    def terminate(*_):
+        controller.on_shutdown()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+
+    if args.simulate:
+        directory = os.path.abspath(args.simulate)
+        if not controller.begin_stick("sim", directory):
+            return 1
+        while controller.player and controller.player.alive():
+            time.sleep(1)
+            if controller.player.idle():
+                break
+        controller.stop_stick("simulated stick finished")
+        return 0
+
+    events = queue.Queue()
+    stop_event = threading.Event()
+    threading.Thread(target=udev_events, args=(events, stop_event), daemon=True).start()
+
+    LOG.info("musicboxd up, waiting for a stick (mount point %s)", controller.mnt)
+    interval = float(cfg["RECONCILE_INTERVAL"])
+    while True:
+        try:
+            events.get(timeout=interval)
+            time.sleep(0.7)               # let a burst of events settle
+            while not events.empty():      # and drain it
+                events.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            controller.reconcile()
+        except Exception:                  # never let one bad event kill the daemon
+            LOG.exception("reconcile failed")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
