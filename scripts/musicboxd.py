@@ -38,6 +38,7 @@ DEFAULTS = {
     "AUDIO_DEVICE": "",          # empty = the ALSA default from /etc/asound.conf
     "MOUNT_POINT": "/run/musicbox",
     "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
+    "PLAYLIST_FILE": "/run/musicbox.m3u8",  # same reason: it cannot live on the stick
     "MPV_EXTRA_ARGS": "",      # space-separated, e.g. --ao=null for testing without speakers
     "STATE_FILE": "/var/lib/musicbox/state.json",
     "RECONCILE_INTERVAL": "5",   # s, backstop poll in case a udev event is missed
@@ -119,6 +120,9 @@ def scan_tracks(mnt, extensions):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in names:
             if name.startswith("."):
+                continue
+            if "\n" in name or "\r" in name:
+                LOG.warning("skipping %r: newline in filename breaks the m3u playlist", name)
                 continue
             if name.rsplit(".", 1)[-1].lower() in extensions:
                 tracks.append(os.path.join(root, name))
@@ -213,9 +217,10 @@ def set_volume(percent="", decibels=""):
 # --------------------------------------------------------------------------- mpv IPC
 
 class Mpv:
-    def __init__(self, sock_path, audio_device="", extra_args=""):
+    def __init__(self, sock_path, audio_device="", extra_args="", playlist_path="/run/musicbox.m3u8"):
         self.sock_path = sock_path
         self.audio_device = audio_device
+        self.playlist_path = playlist_path
         self.extra_args = shlex.split(extra_args) if extra_args else []
         self.proc = None
         self.sock = None
@@ -319,11 +324,16 @@ class Mpv:
             return
         window = tracks[:max_tracks]
         LOG.info("loading %d track(s) from #%d", len(window), base_index)
-        self.call("loadfile", window[0], "replace")
+        # One playlist file, one IPC command. Handing mpv N tracks individually
+        # cost a round trip each: 10 tracks measured 0.78 s vs 0.34 s for one, and
+        # it scales with the number of files on the stick.
+        with open(self.playlist_path, "w", encoding="utf-8") as fh:
+            fh.write("#EXTM3U\n")
+            for path in window:
+                fh.write(path + "\n")
+        self.call("loadfile", self.playlist_path, "replace")
         if resume_pos > 0.5:
             self._seek_when_ready(resume_pos)
-        for path in window[1:]:
-            self.call("loadfile", path, "append")
 
     def stop(self):
         """End playback but keep the process warm for the next stick."""
@@ -476,7 +486,7 @@ class Controller:
         """Start mpv now so the first stick does not pay the 0.75 s spawn cost."""
         if self.player is None:
             self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
-                              self.cfg["MPV_EXTRA_ARGS"])
+                              self.cfg["MPV_EXTRA_ARGS"], self.cfg["PLAYLIST_FILE"])
         try:
             self.player.ensure_running()
             LOG.info("player pre-started; stick->audio should be about a second")
@@ -531,7 +541,7 @@ class Controller:
         set_volume(self.cfg["VOLUME"], self.cfg["VOLUME_DB"])
         if self.player is None:
             self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
-                              self.cfg["MPV_EXTRA_ARGS"])
+                              self.cfg["MPV_EXTRA_ARGS"], self.cfg["PLAYLIST_FILE"])
         try:
             self.player.start(tracks[start_index:], start_index, start_pos,
                               int(self.cfg["MAX_TRACKS"]))
@@ -664,7 +674,8 @@ def main():
             LOG.error("no playable files in %s", args.demo)
             return 1
         set_volume(cfg["VOLUME"], cfg["VOLUME_DB"])
-        player = Mpv(cfg["MPV_SOCKET"], cfg["AUDIO_DEVICE"], cfg["MPV_EXTRA_ARGS"])
+        player = Mpv(cfg["MPV_SOCKET"], cfg["AUDIO_DEVICE"], cfg["MPV_EXTRA_ARGS"],
+                     cfg["PLAYLIST_FILE"])
         player.start(tracks, 0, 0.0, int(cfg["MAX_TRACKS"]))
         try:
             while player.alive() and not player.idle():
