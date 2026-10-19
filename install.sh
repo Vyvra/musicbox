@@ -30,10 +30,17 @@ if grep -qE '^[[:space:]]*dtoverlay=vc4-kms-v3d[[:space:]]*$' "$BOOT"; then
 fi
 
 # HiFiBerry Amp2. Kernel >= 6.1.77 needs the -std variant; plain hifiberry-dacplus
-# is for older kernels and silently gives you no card on this image (6.18.50).
+# is for older kernels. BUT a HAT with an ID EEPROM (this one says vendor=HiFiBerry,
+# product=DAC+) gets its overlay applied by the firmware automatically — adding a
+# second one on top can conflict. So: if a HiFiBerry card already exists, leave well
+# alone; if an overlay is already in config.txt, keep it; otherwise add one.
 if grep -qE '^[[:space:]]*dtoverlay=hifiberry-' "$BOOT"; then
     echo "   a HiFiBerry overlay is already present, leaving it alone:"
     grep -E '^[[:space:]]*dtoverlay=hifiberry-' "$BOOT" | sed 's/^/     /'
+elif aplay -l 2>/dev/null | grep -qiE 'hifiberry'; then
+    echo "   HiFiBerry card already present (HAT EEPROM applied the overlay):"
+    aplay -l 2>/dev/null | grep -iE '^card.*hifiberry' | sed 's/^/     /'
+    echo "   not adding a dtoverlay line"
 else
     cat >>"$BOOT" <<'EOF'
 

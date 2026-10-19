@@ -21,6 +21,7 @@ import os
 import queue
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -32,7 +33,8 @@ LOG = logging.getLogger("musicboxd")
 
 DEFAULTS = {
     "MUSIC_EXT": "mp3,m4a,flac,ogg,opus,wav",
-    "VOLUME": "75",              # Amp2 PCM5122 hardware volume, percent; "" = leave alone
+    "VOLUME_DB": "-18",         # hardware volume in dB (preferred); see set_volume()
+    "VOLUME": "",               # legacy percentage, only if VOLUME_DB is empty
     "AUDIO_DEVICE": "",          # empty = the ALSA default from /etc/asound.conf
     "MOUNT_POINT": "/run/musicbox",
     "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
@@ -124,18 +126,36 @@ def scan_tracks(mnt, extensions):
     return tracks
 
 
+def fs_uuid(dev):
+    """Filesystem UUID straight from udev's by-uuid links.
+
+    Deliberately not `blkid`: it lives in sbin, which is not on a normal user's
+    PATH, and a FileNotFoundError there killed the whole identity lookup (found
+    by running the daemon as a non-root user on the Pi).
+    """
+    target = os.path.realpath(dev)
+    for link in glob.glob("/dev/disk/by-uuid/*"):
+        try:
+            if os.path.realpath(link) == target:
+                return os.path.basename(link)
+        except OSError:
+            continue
+    return ""
+
+
 def stick_identity(dev, mnt, tracks):
     """Stable key for the resume state: filesystem UUID, else a content fingerprint."""
-    res = run(["blkid", "-s", "UUID", "-o", "value", dev])
-    uuid = res.stdout.strip()
+    uuid = fs_uuid(dev)
     if uuid:
         return "uuid:" + uuid
-    res = run(["lsblk", "-dno", "SERIAL", os.path.dirname(dev) or dev])
-    serial = res.stdout.strip()
-    if serial:
-        return "serial:" + serial
-    fingerprint = hashlib_of(tracks, mnt)
-    return "content:" + fingerprint
+
+    lsblk = shutil.which("lsblk")
+    if lsblk:
+        serial = run([lsblk, "-dno", "SERIAL", os.path.dirname(dev) or dev]).stdout.strip()
+        if serial:
+            return "serial:" + serial
+
+    return "content:" + hashlib_of(tracks, mnt)
 
 
 def hashlib_of(tracks, mnt):
@@ -163,15 +183,29 @@ def resolve_resume(tracks, mnt, record):
     return 0, 0.0
 
 
-def set_volume(percent):
-    """Set the HAT's hardware volume (PCM5122 'Digital'), found by card name."""
-    if not percent:
+def set_volume(percent="", decibels=""):
+    """Set the HAT's hardware volume ('Digital' on the PCM5122), found by card name.
+
+    dB is preferred over a percentage: this mixer is logarithmic, so a percentage
+    is a poor proxy for loudness. Measured on the Amp2: 50% = -51.5 dB, 60% =
+    -41.5 dB, 75% = -26 dB, 90% = -10.5 dB, 100% = 0 dB (0.5 dB per raw step from
+    207). The default of -12 dB is comfortable and leaves room to turn up.
+    """
+    if decibels:
+        value = f"{decibels}dB"
+    elif percent:
+        value = f"{percent}%"
+    else:
         return
+
     card = "sndrpihifiberry"
     for ctl in ("Digital", "PCM", "Master"):
-        res = run(["amixer", "-c", card, "sset", ctl, f"{percent}%", "unmute"])
-        if res.returncode == 0:
-            LOG.info("hardware volume -> %s%% (%s)", percent, ctl)
+        args = ["amixer", "-c", card, "sset", ctl]
+        if value.startswith("-"):
+            args.append("--")     # otherwise amixer reads -12dB as a switch
+        args += [value, "unmute"]
+        if run(args).returncode == 0:
+            LOG.info("hardware volume -> %s (%s)", value, ctl)
             return
     LOG.warning("no hardware volume control found on card %s", card)
 
@@ -238,30 +272,66 @@ class Mpv:
 
     # -- playback
 
-    def start(self, tracks, base_index, resume_pos, max_tracks):
+    def _spawn(self):
         os.makedirs(os.path.dirname(self.sock_path), exist_ok=True)
         if os.path.exists(self.sock_path):
             os.unlink(self.sock_path)
         cmd = [
             "mpv", "--no-config", "--no-video", "--idle=yes", "--terminal=no",
             "--really-quiet", "--gapless-audio=yes", "--audio-buffer=0.5",
+            # Lite has no sound server; without this mpv probes PipeWire and logs
+            # "pw.conf: can't load config client.conf" on every start.
+            "--ao=alsa",
             f"--input-ipc-server={self.sock_path}",
         ]
         if self.audio_device:
             cmd.append(f"--audio-device={self.audio_device}")
         cmd.extend(self.extra_args)
-        LOG.info("starting mpv, %d track(s) from #%d", len(tracks), base_index)
+        LOG.info("starting mpv")
         self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._connect()
+
+    def ensure_running(self):
+        """Keep one mpv alive between sticks.
+
+        Measured on the Pi 3B+: spawning mpv and connecting its socket costs 0.72-0.76 s,
+        while loading a file into an already-running instance costs 0.12 s (still 0.12 s
+        after 30 s idle). That difference is the whole reason this class is stateful.
+        """
+        if self.proc is not None and self.proc.poll() is not None:
+            LOG.warning("mpv had exited, respawning")
+            self.proc = None
+            if self.sock is not None:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
+        if self.proc is None:
+            self._spawn()
+        elif self.sock is None:
+            self._connect()
+
+    def start(self, tracks, base_index, resume_pos, max_tracks):
+        self.ensure_running()
         if not tracks:
             return
         window = tracks[:max_tracks]
+        LOG.info("loading %d track(s) from #%d", len(window), base_index)
         self.call("loadfile", window[0], "replace")
         if resume_pos > 0.5:
             self._seek_when_ready(resume_pos)
         for path in window[1:]:
             self.call("loadfile", path, "append")
+
+    def stop(self):
+        """End playback but keep the process warm for the next stick."""
+        try:
+            if self.alive():
+                self.call("stop")
+        except (ConnectionError, TimeoutError, OSError):
+            pass
 
     def _seek_when_ready(self, seconds, timeout=15.0):
         """mpv 0.41 rejects the 4th (options) argument of loadfile, so seek instead.
@@ -384,10 +454,12 @@ class Controller:
         self.player = None
         self.attempts = {}
         self.ignored = set()
+        self.t0 = None            # when the stick appeared, for latency logging
 
     # -- public
 
-    def reconcile(self):
+    def reconcile(self, event_at=None):
+        self.t0 = event_at or time.monotonic()
         present = find_usb_partitions()
         if self.stick and self.stick.dev not in present:
             self.stop_stick("stick removed")
@@ -400,9 +472,22 @@ class Controller:
         if self.stick:
             self.monitor()
 
+    def warm_up(self):
+        """Start mpv now so the first stick does not pay the 0.75 s spawn cost."""
+        if self.player is None:
+            self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
+                              self.cfg["MPV_EXTRA_ARGS"])
+        try:
+            self.player.ensure_running()
+            LOG.info("player pre-started; stick->audio should be about a second")
+        except (TimeoutError, ConnectionError, OSError) as exc:
+            LOG.warning("could not pre-start mpv (%s); will start on demand", exc)
+
     def on_shutdown(self, *_):
         if self.stick:
-            self.stop_stick("shutting down")
+            self.stop_stick("shutting down", keep_warm=False)
+        elif self.player:
+            self.player.quit()
 
     # -- start / stop
 
@@ -443,9 +528,10 @@ class Controller:
         if start_pos:
             LOG.info("resuming '%s' at %.1fs", resume.get("track"), start_pos)
         self.stick.base_index = start_index
-        set_volume(self.cfg["VOLUME"])
-        self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
-                          self.cfg["MPV_EXTRA_ARGS"])
+        set_volume(self.cfg["VOLUME"], self.cfg["VOLUME_DB"])
+        if self.player is None:
+            self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
+                              self.cfg["MPV_EXTRA_ARGS"])
         try:
             self.player.start(tracks[start_index:], start_index, start_pos,
                               int(self.cfg["MAX_TRACKS"]))
@@ -457,9 +543,24 @@ class Controller:
             self.ignored.add(dev)
             umount(self.mnt)
             return False
+        self.report_latency()
         return True
 
-    def stop_stick(self, reason):
+    def report_latency(self):
+        """Log how long the child actually waited, instead of guessing."""
+        if self.t0 is None or self.player is None:
+            return
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            pos = self.player.position()
+            if isinstance(pos, (int, float)) and pos > 0:
+                LOG.info("audio up %.2fs after the stick appeared",
+                         time.monotonic() - self.t0)
+                return
+            time.sleep(0.02)
+        LOG.warning("audio did not start within 10s")
+
+    def stop_stick(self, reason, keep_warm=True):
         stick = self.stick
         if stick is None:
             return
@@ -474,8 +575,11 @@ class Controller:
                            os.path.relpath(stick.tracks[index], stick.mnt), pos or 0)
 
         if self.player:
-            self.player.quit()
-        self.player = None
+            if keep_warm:
+                self.player.stop()        # keep the process, drop the playlist
+            else:
+                self.player.quit()
+                self.player = None
         umount(stick.mnt)
         self.stick = None
 
@@ -559,7 +663,7 @@ def main():
         if not tracks:
             LOG.error("no playable files in %s", args.demo)
             return 1
-        set_volume(cfg["VOLUME"])
+        set_volume(cfg["VOLUME"], cfg["VOLUME_DB"])
         player = Mpv(cfg["MPV_SOCKET"], cfg["AUDIO_DEVICE"], cfg["MPV_EXTRA_ARGS"])
         player.start(tracks, 0, 0.0, int(cfg["MAX_TRACKS"]))
         try:
@@ -580,8 +684,12 @@ def main():
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
 
+    # Spawn mpv up front: the process start is what a child actually waits for.
+    controller.warm_up()
+
     if args.simulate:
         directory = os.path.abspath(args.simulate)
+        controller.t0 = time.monotonic()
         if not controller.begin_stick("sim", directory):
             return 1
         while controller.player and controller.player.alive():
@@ -598,15 +706,20 @@ def main():
     LOG.info("musicboxd up, waiting for a stick (mount point %s)", controller.mnt)
     interval = float(cfg["RECONCILE_INTERVAL"])
     while True:
+        event_at = None
         try:
             events.get(timeout=interval)
-            time.sleep(0.7)               # let a burst of events settle
-            while not events.empty():      # and drain it
+            event_at = time.monotonic()
+            # A plug fires several udev events (disk, partition, change). Reconcile
+            # is idempotent, so a short settle suffices; this used to be 0.7 s added
+            # to every single start. The periodic reconcile covers anything missed.
+            time.sleep(0.10)
+            while not events.empty():      # drain the burst
                 events.get_nowait()
         except queue.Empty:
             pass
         try:
-            controller.reconcile()
+            controller.reconcile(event_at)
         except Exception:                  # never let one bad event kill the daemon
             LOG.exception("reconcile failed")
 
