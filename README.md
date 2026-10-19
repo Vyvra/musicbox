@@ -150,20 +150,35 @@ correctness.
 
 Choices worth knowing:
 
-- **`hifiberry-dacplus-std`, not `hifiberry-dacplus`.** HiFiBerry's docs split at kernel
-  6.1.77: the Amp2/DAC+ Standard need the `-std` overlay on newer kernels. This image is
-  6.18.50, so the older name silently gives no sound card.
-- **mpv, not mpg123.** It gives a JSON control socket (position, playlist index, seek)
-  on an ARMv7 board that decodes MP3 with plenty of headroom, and resume needs a seek.
+- **One long-lived mpv, not one process per plug.** Measured on the Pi 3B+: spawning mpv
+  and connecting its IPC socket costs **0.72–0.76 s**; loading a file into an mpv that is
+  already running costs **0.12 s** (still 0.12 s after 30 s idle). So the daemon
+  pre-starts mpv at boot and only loads files into it. Stick detected → audio is
+  **0.33–0.34 s**.
+- **The audio buffer is irrelevant to start latency** (0.88–0.90 s at 0.15/0.25/0.5 s), so
+  it stays at 0.5 s for underrun safety rather than being traded for speed.
+- **`hifiberry-dacplus-std` vs `hifiberry-dacplus` — and why `install.sh` adds neither**
+  when the HAT has an EEPROM. HiFiBerry's docs split at kernel 6.1.77 (this image is
+  6.18.50), but this Amp2 reports `vendor=HiFiBerry, product=DAC+` in its HAT EEPROM, so
+  the firmware applies `hifiberry-dacplus` itself. A second overlay can conflict, so the
+  installer detects an existing card and adds nothing. The PCM5122 `Digital` mixer still
+  appears either way.
+- **mpv, not mpg123.** It gives a JSON control socket (position, playlist index, seek).
   Note mpv ≥ 0.38 documents a 4th `loadfile` argument, but 0.41.0 rejects it as
   *invalid parameter*, so resume is done by seeking once the file is open.
+- **`--ao=alsa` explicitly.** Lite has no sound server; without it mpv probes PipeWire on
+  every start and logs `pw.conf: can't load config client.conf`.
 - **Socket at `/run/musicbox.sock`, not inside the mount point** — the stick is mounted
   read-only, so a socket written there could never be created.
 - **`hw` ALSA default** (`/etc/asound.conf` → `card sndrpihifiberry`): no dmix, no
   resampling, and if the HAT is missing you get a clear failure instead of HDMI.
-- **Resume identity is the filesystem UUID**, falling back to disk serial, then to a
-  fingerprint of the file list. Reformatting a stick gives it a new identity, which is
-  the intended behaviour.
+- **Volume is set in dB, not percent.** The PCM5122 mixer is logarithmic, so a percentage
+  is a poor proxy for loudness: 50 % = −51.5 dB, 60 % = −41.5 dB, 75 % = −26 dB,
+  90 % = −10.5 dB, 100 % = 0 dB (0.5 dB per raw step from 207). Default is −18 dB.
+- **Resume identity comes from `/dev/disk/by-uuid`**, not `blkid`: `blkid` lives in `sbin`,
+  which is not on a normal user's `PATH`, and calling it crashed the whole identity lookup
+  when the daemon ran unprivileged (found on the Pi). Fallbacks: disk serial, then a
+  fingerprint of the file list. Reformatting a stick gives it a new identity — intended.
 
 ## Files
 
@@ -184,7 +199,8 @@ Configuration lives in `/etc/musicbox/config` (all keys optional):
 
 ```
 MUSIC_EXT=mp3,m4a,flac,ogg,opus,wav
-VOLUME=75                        # Amp2 hardware volume; empty = leave alone
+VOLUME_DB=-18                    # hardware volume in dB (the scale is logarithmic)
+VOLUME=                          # legacy percentage, only if VOLUME_DB is empty
 AUDIO_DEVICE=                    # empty = ALSA default from /etc/asound.conf
 RECONCILE_INTERVAL=5             # s
 SAVE_INTERVAL=60                 # s, position checkpoint while playing
@@ -222,14 +238,14 @@ is already correct (`KillMode=mixed`).
 | Stick plugged in, nothing happens | `journalctl -u musicboxd -f`. Common causes: filesystem not mounted (`blkid`), no matching extension, or the stick was mounted but the daemon gave up after 3 mount attempts — unplug and replug. |
 | Plays the wrong order | Rename with leading numbers; ordering is natural-sorted per directory. |
 | Works, then dies after a week | Suspect the SD card. See hardening below. |
-| Everything looks right but silent at low volume | Hardware volume defaults to `VOLUME=75`, i.e. 75 % of the DAC's range. Raise it in `/etc/musicbox/config`. |
+| Everything looks right but quiet | Volume is in dB and the scale is logarithmic: `VOLUME_DB=-18` by default, and −6 dB halves the level. Change `/etc/musicbox/config`, or live: `amixer -c sndrpihifiberry sset Digital -- -12dB`. |
 
 ## Deliberately deferred
 
 Agreed on 2026-10-19: get playback working first, then decide the rest.
 
 - **Physical controls** — next/prev/pause buttons and a volume knob. Volume is already
-  reachable (`amixer -c sndrpihifiberry sset Digital N%`), and a USB keyboard with media
+  reachable (`amixer -c sndrpihifiberry sset Digital -- -12dB`), and a USB keyboard with media
   keys is useful during testing.
 - **Status LED** — one GPIO pin: steady = playing, slow blink = waiting, fast = error.
 - **SD hardening** — *written* (`scripts/harden.sh`: journald `Storage=volatile` with a
@@ -260,3 +276,31 @@ Tested on codequill (x86, mpv 0.41.0, `--ao=null`), 2026-10-19:
 **Not yet tested on hardware:** the HAT (card appears, sound comes out), udev event
 handling with a real stick, and the systemd stop path. Those are the first things to run
 on the Pi.
+
+### Verified on the actual box (2026-10-19)
+
+The board turned out to be a **Pi 3B+** (not the planned 2B) with the Amp2 on the 40-pin
+header, running the 32-bit `-v7` image — all fine for this job.
+
+- `sndrpihifiberry` is the **only** card after `dtparam=audio=off`; onboard and HDMI audio
+  are gone, and a stereo 440 Hz test tone was confirmed **on both channels by ear**
+- the HAT EEPROM reports `vendor=HiFiBerry, product=DAC+`, so the firmware applies the
+  overlay and `install.sh` adds none
+- the USB WiFi dongle (RTL8188EUS) is what actually gets the box on the network; the
+  onboard `wlan0` and `eth0` are down
+- real stick, three plug/unplug cycles: detected as `uuid:EFDF-97BC`, resumed
+  49.7 → 60.6 → 80.2 s, and every unplug saved the position
+
+## Latency (measured, and why it is what it is)
+
+| stage | cost |
+| --- | --- |
+| spawn mpv + connect its IPC socket | 0.72–0.76 s → removed by keeping mpv warm |
+| loadfile into a warm mpv | 0.12 s (still 0.12 s after 30 s idle) |
+| audio-buffer 0.15 / 0.25 / 0.5 s | 0.88–0.90 s cold at all three — **no effect**; that time was all process start |
+| udev settle (was a blanket 0.7 s) | now 0.10 s |
+| **stick detected → audio** | **0.33–0.34 s**, three consecutive plugs |
+
+The lesson: measure the split before optimising. Shrinking the audio buffer or the udev
+settle would have bought ~0.6 s in total and risked crackle; keeping one mpv alive bought
+~0.75 s and risks nothing.
