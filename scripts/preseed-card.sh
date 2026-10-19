@@ -4,6 +4,8 @@
 #
 #   sudo bash scripts/preseed-card.sh /dev/sda --user musicbox --hostname musicbox
 #   sudo bash scripts/preseed-card.sh /dev/sda --user musicbox --wifi "MyNet" "pass phrase"
+#   sudo bash scripts/preseed-card.sh /dev/sda --user musicbox \\
+#        --wifi-nm /etc/NetworkManager/system-connections/MyNetwork.nmconnection
 #
 # Everything here was verified against the 2026-10-06 Trixie image's own scripts:
 #   * /usr/lib/systemd/system/userconfig.service -> /usr/lib/userconf-pi/userconf-service
@@ -13,15 +15,19 @@
 set -euo pipefail
 
 DEV="${1:-}"; shift || true
-USER_NAME=""; HOSTNAME_=""; # sudo resets $HOME to /root, so derive the invoking user's home instead.
+USER_NAME=""; HOSTNAME_=""; WIFI_SSID=""; WIFI_PASS=""; WIFI_NM=""
+# sudo resets $HOME to /root, so derive the invoking user's home instead.
 INVOKER_HOME="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)"
-KEY_FILE="${INVOKER_HOME:-$HOME}/.ssh/id_ed25519.pub"; WIFI_SSID=""; WIFI_PASS=""
+KEY_FILE="${INVOKER_HOME:-$HOME}/.ssh/id_ed25519.pub"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --user) USER_NAME="$2"; shift 2 ;;
         --hostname) HOSTNAME_="$2"; shift 2 ;;
         --key) KEY_FILE="$2"; shift 2 ;;
         --wifi) WIFI_SSID="$2"; WIFI_PASS="$3"; shift 3 ;;
+        # Copy ssid+psk out of an existing NetworkManager keyfile: keeps the
+        # passphrase out of argv (and therefore out of 'ps').
+        --wifi-nm) WIFI_NM="$2"; shift 2 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -79,6 +85,14 @@ fi
 # --- wifi (only useful with a USB dongle; the Pi 2B has no radio) -----------
 printf '[main]\nWirelessEnabled=true\n' >"$WORK/nmstate"
 install -m 0644 "$WORK/nmstate" "$R/var/lib/NetworkManager/NetworkManager.state"
+
+if [ -n "$WIFI_NM" ]; then
+    [ -r "$WIFI_NM" ] || die "cannot read $WIFI_NM"
+    WIFI_SSID="$(sed -n 's/^ssid=//p' "$WIFI_NM" | head -1 | tr -d '"')"
+    WIFI_PASS="$(sed -n 's/^psk=//p' "$WIFI_NM" | head -1 | tr -d '"')"
+    [ -n "$WIFI_SSID" ] || die "no ssid= found in $WIFI_NM"
+fi
+
 if [ -n "$WIFI_SSID" ]; then
     {
         echo "[connection]"

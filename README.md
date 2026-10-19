@@ -14,6 +14,7 @@ remembers where it was; plug the same stick back in and it carries on from that 
 | 12–24 V DC supply | The Amp2 powers the *Pi as well*; do **not** also power the Pi over micro-USB. |
 | microSD, 16 GB+ | Only the OS and logs live on it; music is never copied there. |
 | USB extension cable | Whatever is comfortable for a child to reach. A passive extension is fine. |
+| USB WiFi dongle (optional) | Verified working: **Realtek RTL8188EUS** (TP-Link, `0bda:8179`). The image ships `rtl8xxxu` + `rtl8188eufw.bin`, so no extra package or out-of-tree driver. ⚠️ 2.4 GHz only. |
 
 Power output scales with the supply: ~14 W/channel at 12 V into 4 Ω, ~28 W at 24 V into
 8 Ω. HiFiBerry's recommended range is 12–20 V; 24 V is the absolute maximum. A 19 V
@@ -84,6 +85,20 @@ first-boot scripts:
 ⚠️ **Never create the user's home as `/home/musicbox` on the card.** `userconf-pi`
 renames the existing uid-1000 `pi` user with `usermod -m -d`, which fails if the target
 home already exists.
+
+**WiFi passphrase.** With the dongle, supply it interactively so it never enters a
+terminal buffer or a transcript:
+
+```bash
+sudo bash scripts/set-wifi-password.sh /dev/sda MyNetwork
+```
+
+`--wifi "SSID" "pass"` also works for scripting, but puts the passphrase in `argv`
+(visible in `ps`). There is **no** way to copy it out of this workstation's saved
+connection: that keyfile has `psk-flags=1`, i.e. the secret lives in the KDE keyring and
+`nmcli --show-secrets` returns nothing from a non-graphical root context. A keyfile
+written without a `psk=` associates as if the network were open and silently fails, so
+always confirm `grep -c '^psk='` is 1 afterwards.
 
 ⚠️ **Never pipe file content through `sudo -S`.** `printf '…' | sudo -S tee file` gives
 sudo the first line as its password and hands the *rest* to `tee` — in practice it
@@ -161,6 +176,8 @@ Choices worth knowing:
 | `scripts/inspect-image.py` | read files out of the `.img` without root (used to verify the overlay exists before flashing) |
 | `scripts/flash-sd.sh` | guarded image write with a read-back check |
 | `scripts/preseed-card.sh` | headless first boot: user, SSH, hostname, optional WiFi |
+| `scripts/set-wifi-password.sh` | interactive passphrase entry (`read -rs`, never in argv) |
+| `scripts/harden.sh` | SD-wear: journald volatile, `commit=600`, optional overlay root |
 | `credentials.txt` | Pi user/password (git-ignored, mode 600) |
 
 Configuration lives in `/etc/musicbox/config` (all keys optional):
@@ -215,9 +232,10 @@ Agreed on 2026-10-19: get playback working first, then decide the rest.
   reachable (`amixer -c sndrpihifiberry sset Digital N%`), and a USB keyboard with media
   keys is useful during testing.
 - **Status LED** — one GPIO pin: steady = playing, slow blink = waiting, fast = error.
-- **SD hardening** — `journald` `Storage=volatile`, `commit=600` in `/etc/fstab`, and
-  optionally `raspi-config` → Overlay File System. Note that overlay makes `apt upgrade`
-  non-persistent, so do it *after* the box is finished.
+- **SD hardening** — *written* (`scripts/harden.sh`: journald `Storage=volatile` with a
+  64 MB cap, `commit=600` on `/`, optional `--overlay`, optional `--no-updates`). Not yet
+  run on the Pi. Note that overlay makes `apt upgrade` non-persistent, so apply it *after*
+  the box is finished.
 - **Storage of the resume state** is `/var/lib/musicbox/state.json`; it survives reboot
   and is written on stop plus once a minute while playing.
 
@@ -233,6 +251,8 @@ Tested on codequill (x86, mpv 0.41.0, `--ao=null`), 2026-10-19:
 - first-boot mechanism read from the image's own scripts (`userconfig.service`,
   `userconf-pi/userconf-service`, `sshswitch.service`, `imager_custom set_wlan`), and the
   generated password hash was re-derived from the salt to prove it matches
+- the WiFi dongle path: `CONFIG_RTL8XXXU=m`, firmware `rtl8188eufw.bin`, and the module's
+  modalias claims `usb:v0BDAp8179` — read out of the image, not assumed
 - track ordering, extension filtering, dotfile skipping, per-stick state isolation and
   forget-on-completion
 - full resume path: played 4 s, stopped, resumed at 4.0 s, played to 6.0 s
