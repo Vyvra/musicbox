@@ -225,6 +225,13 @@ SPOTIFY_BITRATE=320
 LIBRESPOT_ALWAYS_ON=0        # see below
 ```
 
+**`SPOTIFY_BITRATE`** accepts `96`, `160` or `320` and is the first thing to lower on a
+weak CPU: Spotify streams Ogg Vorbis, so decode cost scales with the bitrate. Measured
+reasoning, not a guess — a Pi 3B+ has headroom for 320, but a **Pi Zero W is a single
+ARMv6 core with VFPv2 and no NEON**, where 320 is the most expensive setting available.
+On that board use `SPOTIFY_BITRATE=96`; 320 costs roughly 3× the decode work of 96 for a
+quality difference no small speaker will reproduce.
+
 **`LIBRESPOT_ALWAYS_ON`** (default `1` on this box) — the box stays resident as a
 Spotify Connect speaker, so a Spotify stick starts in ~0.3 s instead of ~1.6 s and a
 phone can also play to it. Three measured facts make this work, and one of them is not
