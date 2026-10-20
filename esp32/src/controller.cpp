@@ -55,8 +55,23 @@ bool Controller::begin() {
   // shuffle="on": resume track first, the rest in random order - and reorder the vector
   // itself, because the index we save must refer to the order actually playing.
   if (cmds.shuffle == 1 && media_.tracks.size() > 1) {
+    // Keep the track we are about to play in place and randomise the rest, then point the
+    // start index at 0 - the list itself has been reordered, so the old index is
+    // meaningless. Getting this wrong is subtle: shuffling from index 1 while keeping the
+    // resume index plays a *different* track at the saved position. The Pi does exactly
+    // this in shuffled_from().
+    Track head = media_.tracks[startIndex];
+    std::vector<Track> rest;
+    rest.reserve(media_.tracks.size() - 1);
+    for (size_t i = 0; i < media_.tracks.size(); i++) {
+      if ((int)i != startIndex) rest.push_back(media_.tracks[i]);
+    }
     std::mt19937 rng(esp_random());
-    std::shuffle(media_.tracks.begin() + 1, media_.tracks.end(), rng);
+    std::shuffle(rest.begin(), rest.end(), rng);
+    media_.tracks.clear();
+    media_.tracks.push_back(head);
+    media_.tracks.insert(media_.tracks.end(), rest.begin(), rest.end());
+    startIndex = 0;
     Serial.printf("[box] shuffle is on: %u track(s) in random order\n",
                   (unsigned)media_.tracks.size());
   }

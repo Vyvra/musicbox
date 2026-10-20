@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <type_traits>
 #include <memory>
 #include <string>
 
@@ -24,13 +25,17 @@ class String {
   explicit String(unsigned int value) : value_(std::to_string(value)) {}
   explicit String(int value) : value_(std::to_string(value)) {}
   explicit String(unsigned long value) : value_(std::to_string(value)) {}
-  explicit String(unsigned long value, unsigned char base) {
+  // Templated so String(uint32_t, HEX) is an exact match for the integer form rather than
+  // a tie with the float constructor - which is what Arduino's own overload set resolves to.
+  template <typename T,
+            typename = typename std::enable_if<std::is_integral<T>::value>::type>
+  explicit String(T value, unsigned char base) {
     char buf[24];
-    if (base == 16) snprintf(buf, sizeof(buf), "%lx", value);
-    else snprintf(buf, sizeof(buf), "%lu", value);
+    if (base == 16) snprintf(buf, sizeof(buf), "%lx", (unsigned long)value);
+    else snprintf(buf, sizeof(buf), "%lu", (unsigned long)value);
     value_ = buf;
   }
-  explicit String(float value, int decimals) {
+  explicit String(float value, unsigned char decimals) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%.*f", decimals, (double)value);
     value_ = buf;

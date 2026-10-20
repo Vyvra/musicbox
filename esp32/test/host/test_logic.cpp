@@ -174,6 +174,56 @@ int main(int argc, char** argv) {
            "Spotify status names the missing engine");
   }
 
+  // ------------------------------------------------ the actual promise: unplug and resume
+  {
+    Mounted stick(argv[1]);                 // audio-only image (no Spotify instruction)
+    expect(stick.ok, "mount the image for the resume round trip");
+    ResumeStore store;
+    store.begin();
+    mbx_test_millis = 0;                    // fresh clock for the checkpoint interval
+
+    std::string playingTrack;
+    uint32_t playingPosition = 0;
+    {
+      Controller box(stick.storage.fs(), store);
+      expect(box.begin(), "first insert starts playback");
+      box.command("next");                    // move away from the first track
+      for (int i = 0; i < 25; i++) box.poll(); // ~25 s of listening
+      playingTrack = fake_current_track();
+      playingPosition = fake_position_seconds();
+      mbx_test_millis += 61000;               // let SAVE_INTERVAL_MS elapse
+      box.poll();                             // checkpoint
+      box.end("unplug");                      // and again on removal
+    }
+    expect(playingPosition > 0, "position advanced while playing");
+    expect(!playingTrack.empty(), "a track was playing when the stick came out");
+
+    {
+      Controller box(stick.storage.fs(), store);
+      expect(box.begin(), "re-inserting starts again");
+      // shuffle re-places the resumed track first, so the index is not stable - the path is
+      expect(std::string(fake_start_track()) == playingTrack,
+             "resumes the track that was playing");
+      expect(fake_last_start_seconds >= (float)playingPosition - 1.0f &&
+                 fake_last_start_seconds <= (float)playingPosition + 1.0f,
+             "resumes at the saved position");
+    }
+  }
+
+  // Identity is a content hash over the *audio* files (musicbox.txt is not a track), so a
+  // stick holding the same music resumes with it. That is a deliberate trade-off: the Pi
+  // keys on the filesystem UUID and can tell such sticks apart; a hash cannot. Asserted
+  // here so the behaviour is recorded rather than assumed.
+  {
+    Mounted other(argv[3]);   // same audio, different musicbox.txt
+    ResumeStore store;
+    store.begin();
+    Controller box(other.storage.fs(), store);
+    expect(box.begin(), "a stick with the same audio starts");
+    expect(fake_last_start_seconds > 0.5f,
+           "identical audio shares the resume point (documented limitation of hashing)");
+  }
+
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASS", failures,
          failures == 1 ? "" : "s");
   return failures ? 1 : 0;

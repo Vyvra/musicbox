@@ -22,6 +22,12 @@ bool ResumeStore::load(const String& identity, String& trackRel, float& seconds)
 
 void ResumeStore::save(const String& identity, const String& trackRel, float seconds) {
   if (!ready_ || identity.length() == 0 || trackRel.length() == 0) return;
+  // NVS keys are capped at 15 characters and putString() fails *silently* when they are
+  // longer, so a too-long identity would mean no resume at all with nothing in the log.
+  if (identity.length() > 15) {
+    Serial.printf("[resume] identity '%s' is too long for an NVS key\n", identity.c_str());
+    return;
+  }
   String blob = trackRel + "|" + String(seconds, 1);
   prefs.putString(identity.c_str(), blob);
 }
