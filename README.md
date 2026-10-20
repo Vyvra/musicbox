@@ -296,12 +296,39 @@ Configuration lives in `/etc/musicbox/config` (all keys optional):
 
 ```
 MUSIC_EXT=mp3,m4a,flac,ogg,opus,wav
-VOLUME_DB=-18                    # hardware volume in dB (the scale is logarithmic)
-VOLUME=                          # legacy percentage, only if VOLUME_DB is empty
+VOLUME_DB=-24                    # hardware volume in dB for local files
+SPOTIFY_VOLUME_DB=               # empty = same as VOLUME_DB (playlists)
+AUDIOBOOK_VOLUME_DB=-15          # spoken word is mastered quieter than music
 AUDIO_DEVICE=                    # empty = ALSA default from /etc/asound.conf
 RECONCILE_INTERVAL=5             # s
 SAVE_INTERVAL=60                 # s, position checkpoint while playing
 ```
+
+### Levels and "normalisation"
+
+There is no single normaliser across both sources, because there is no shared
+reference:
+
+- **Spotify** is normalised by librespot itself (`--normalisation-method dynamic`,
+  `--normalisation-gain-type auto` are its defaults) so tracks within Spotify are already
+  levelled against Spotify's own loudness data.
+- **Local files are not normalised at all** — no ReplayGain tags, and mpv applies nothing
+  by default.
+
+So the two paths are levelled per source with `VOLUME_DB` / `SPOTIFY_VOLUME_DB` /
+`AUDIOBOOK_VOLUME_DB`. Each step of 6 dB halves or doubles the level; `-15` gives the
+audiobook +9 dB over the music.
+
+If you want loudness levelling *within* the local library as well, mpv can do it without
+any code change:
+
+```
+MPV_EXTRA_ARGS=--af=dynaudnorm          # single-pass dynamic normaliser
+```
+
+The catch is that it also compresses music dynamics, which is why it is not on by
+default. For Spotify, `--normalisation-pregain <dB>` (via `LIBRESPOT_BIN` args) shifts
+all Spotify output, but that moves playlists and audiobooks together.
 
 ## Testing without hardware
 

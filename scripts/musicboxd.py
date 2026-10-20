@@ -44,7 +44,7 @@ DEFAULTS = {
     # reference: librespot normalises within Spotify, local files are not normalised at
     # all. So each source gets its own level. Empty = fall back to VOLUME_DB.
     "SPOTIFY_VOLUME_DB": "",
-    "AUDIOBOOK_VOLUME_DB": "-18",
+    "AUDIOBOOK_VOLUME_DB": "-15",
     "AUDIO_DEVICE": "",          # empty = the ALSA default from /etc/asound.conf
     "MOUNT_POINT": "/run/musicbox",
     "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
