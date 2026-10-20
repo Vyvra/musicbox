@@ -289,6 +289,43 @@ Choices worth knowing:
   when the daemon ran unprivileged (found on the Pi). Fallbacks: disk serial, then a
   fingerprint of the file list. Reformatting a stick gives it a new identity — intended.
 
+## Remote control (USB keyboard)
+
+A wireless mini keyboard (Riitek, `1997:2433`) plugs into the box itself and its media keys
+drive playback. `musicbox-keypad.service` reads the keyboard's **Consumer Control** input
+device directly — no window manager, no focus, no X/Wayland involved — and sends one-line
+commands to musicboxd's local socket.
+
+| key | command |
+| --- | --- |
+| PLAYPAUSE | `playpause` |
+| NEXTSONG | `next` |
+| PREVIOUSSONG | `prev` |
+| STOPCD | `stop` |
+| VOLUMEUP / VOLUMEDOWN | ±3 dB of hardware level |
+
+The service matches any device whose name contains `Consumer Control`, so a replacement
+keyboard works unchanged, and it waits patiently when none is attached. It **reads** the
+device without grabbing it — the trade-off is that it cannot stop another consumer of
+those keys.
+
+### musicboxctl
+
+The same control surface is a CLI, so anything that can run a command can drive the box:
+
+```
+musicboxctl next | prev | play | pause | playpause | stop | status
+musicboxctl volume-up | volume-down | volume -12
+```
+
+It talks to `/run/musicbox.ctl` and does not care whether mpv or Spotify is playing — the
+daemon dispatches. That makes `ssh musicbox musicboxctl next` a working remote from any
+machine, with no extra software installed anywhere.
+
+Note: Spotify answers `prev` at the start of a context with **403 Restriction violated**.
+That is Spotify saying there is nothing to go back to, so it is reported as "nothing to go
+back to, or this item cannot be skipped" rather than as a raw error.
+
 ## Files
 
 | Path | What |
