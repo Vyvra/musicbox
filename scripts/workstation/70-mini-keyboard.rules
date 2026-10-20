@@ -1,3 +1,0 @@
-# Give the logged-in desktop user access to the wireless mini keyboard, so the
-# music-box remote can read its media keys. Scoped to this device by USB id.
-SUBSYSTEM=="input", ACTION=="add|change", ATTRS{idVendor}=="1997", ATTRS{idProduct}=="2433", TAG+="uaccess"

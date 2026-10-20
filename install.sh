@@ -63,6 +63,8 @@ echo "== installing musicboxd"
 install -m 0755 "$HERE/scripts/musicboxd.py" /usr/local/bin/musicboxd.py
 install -m 0644 "$HERE/scripts/mbx_spotify.py" /usr/local/bin/mbx_spotify.py
 install -m 0755 "$HERE/scripts/spotify-setup.py" /usr/local/bin/spotify-setup.py
+install -m 0755 "$HERE/scripts/musicboxctl.py" /usr/local/bin/musicboxctl
+install -m 0755 "$HERE/scripts/musicbox-keypad.py" /usr/local/bin/musicbox-keypad.py
 install -d -m 0755 /usr/local/share/musicbox
 install -m 0644 "$HERE/README.md" /usr/local/share/musicbox/README.md 2>/dev/null || true
 install -d -m 0755 /var/lib/musicbox
@@ -83,8 +85,11 @@ EOF
 # ---------------------------------------------------------------- service
 echo "== installing systemd unit"
 install -m 0644 "$HERE/systemd/musicboxd.service" /etc/systemd/system/musicboxd.service
+install -m 0644 "$HERE/systemd/musicbox-keypad.service" /etc/systemd/system/musicbox-keypad.service
 systemctl daemon-reload
 systemctl enable musicboxd.service
+# Media-key remote: harmless with no keyboard attached (it just waits).
+systemctl enable musicbox-keypad.service
 
 echo
 echo "Done. Reboot now:  sudo reboot"

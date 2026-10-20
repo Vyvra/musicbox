@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-"""Drive the music box from this keyboard's media keys.
+"""Media keys from a USB keyboard plugged into the music box itself.
 
-Reads the keyboard's "Consumer Control" device directly, so the keys work whatever
-window has focus (no KDE shortcut needed, and it does not steal keys from the
-desktop because the device is only read, not grabbed).
+Reads the keyboard's "Consumer Control" input device directly (whatever has that
+in its name, so a replacement keyboard works too) and sends one-line commands to
+musicboxd over its local socket - no network, no SSH, no workstation involved.
 
-Commands go to musicboxd on the Pi over a persistent SSH connection (ControlMaster),
-so a keypress does not pay for a new SSH handshake each time.
+Runs as root from systemd so it can open /dev/input without a udev ACL. It reads
+the device without grabbing it, so the keys still behave normally elsewhere.
 """
 import glob
 import os
+import socket
 import struct
-import subprocess
 import sys
 import time
 
-DEVICE_NAME = "Mini Keyboard Consumer Control"
-HOST = "musicbox@musicbox.local"
-REMOTE = "/usr/local/bin/musicboxctl"
-CONTROL_PATH = "~/.cache/musicbox-ssh-%C"
+CONTROL_SOCKET = "/run/musicbox.ctl"
+DEVICE_HINT = "Consumer Control"
+EVENT = struct.Struct("llHHi")     # time, time, type, code, value
+EV_KEY = 1
+DEBOUNCE = 0.15
 
-# linux/input-event-codes.h values this keyboard actually reports
+# linux/input-event-codes.h values reported by the Riitek mini keyboard
 KEYS = {
     164: "playpause",       # KEY_PLAYPAUSE
     163: "next",            # KEY_NEXTSONG
@@ -29,9 +30,6 @@ KEYS = {
     115: "volume-up",       # KEY_VOLUMEUP
     114: "volume-down",     # KEY_VOLUMEDOWN
 }
-EVENT = struct.Struct("llHHi")     # time, time, type, code, value
-EV_KEY = 1
-DEBOUNCE = 0.15
 
 
 def log(msg):
@@ -43,7 +41,7 @@ def find_device():
         name_path = f"/sys/class/input/{os.path.basename(path)}/device/name"
         try:
             with open(name_path, encoding="utf-8", errors="replace") as fh:
-                if fh.read().strip() == DEVICE_NAME:
+                if DEVICE_HINT in fh.read():
                     return path
         except OSError:
             continue
@@ -51,18 +49,22 @@ def find_device():
 
 
 def send(command):
-    started = time.monotonic()
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(5)
     try:
-        subprocess.run(
-            ["ssh", "-4", "-q", "-o", "BatchMode=yes",
-             "-o", "ControlMaster=auto",
-             "-o", f"ControlPath={CONTROL_PATH}",
-             "-o", "ControlPersist=600",
-             HOST, REMOTE, command],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
-        log(f"{command} ({time.monotonic() - started:.2f}s)")
-    except (subprocess.SubprocessError, OSError) as exc:
+        client.connect(CONTROL_SOCKET)
+        client.sendall((command + "\n").encode())
+        reply = b""
+        while not reply.endswith(b"\n"):
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            reply += chunk
+        log(f"{command}: {reply.decode('utf-8', 'replace').strip()}")
+    except OSError as exc:
         log(f"{command} failed: {exc}")
+    finally:
+        client.close()
 
 
 def main():
@@ -70,7 +72,7 @@ def main():
     while True:
         device = find_device()
         if device is None:
-            log(f"waiting for {DEVICE_NAME!r}...")
+            log(f"waiting for a keyboard with {DEVICE_HINT!r}...")
             time.sleep(5)
             continue
         log(f"listening on {device}")
@@ -82,7 +84,7 @@ def main():
                         break
                     _, _, etype, code, value = EVENT.unpack(data)
                     if etype != EV_KEY or value != 1:
-                        continue          # ignore releases; 2 is auto-repeat
+                        continue        # ignore releases; 2 is auto-repeat
                     command = KEYS.get(code)
                     if not command:
                         continue

@@ -165,6 +165,12 @@ class Api:
                 if exc.code == 403 and "PREMIUM" in detail.upper():
                     raise SpotifyError(
                         "Spotify refused: this account needs Premium") from exc
+                if exc.code == 403 and "Restriction violated" in detail:
+                    # Not a bug: Spotify has nothing to go back to (start of the
+                    # context) or the item is not skippable.
+                    raise SpotifyError(
+                        "Spotify refused: nothing to go back to, or this item "
+                        "cannot be skipped") from exc
                 raise SpotifyError(f"{method} {path}: HTTP {exc.code} {detail}") from exc
             except urllib.error.URLError as exc:
                 raise SpotifyError(f"cannot reach Spotify: {exc.reason}") from exc

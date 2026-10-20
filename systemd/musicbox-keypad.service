@@ -1,0 +1,13 @@
+[Unit]
+Description=Music box media-key remote (USB keyboard)
+After=musicboxd.service
+Wants=musicboxd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/musicbox-keypad.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
