@@ -33,19 +33,32 @@ class SpotifyError(Exception):
     pass
 
 
-def playlist_uri(text):
-    """Accept a playlist URL, a bare ID, or an already-formed URI."""
+def spotify_uri(text):
+    """Accept a Spotify URL, a bare ID, or an already-formed URI.
+
+    Note the audiobook special case, measured against the Web API: audiobooks and
+    podcasts are both addressed as `spotify:show:<id>`, and `spotify:audiobook:<id>`
+    is rejected with 400 "Invalid context uri".
+    """
     text = text.strip()
     if text.startswith("spotify:"):
         return text
     if "open.spotify.com" in text:
         parts = [p for p in urllib.parse.urlparse(text).path.split("/") if p]
-        if len(parts) >= 2 and parts[0] in ("playlist", "album", "track", "artist"):
-            return f"spotify:{parts[0]}:{parts[1]}"
+        if len(parts) >= 2:
+            kind = parts[0]
+            if kind == "audiobook":
+                kind = "show"           # see docstring: only :show: is playable
+            if kind in ("playlist", "album", "track", "artist", "show", "episode"):
+                return f"spotify:{kind}:{parts[1]}"
         raise SpotifyError(f"cannot parse Spotify link: {text}")
     if text and " " not in text:
         return f"spotify:playlist:{text}"
     raise SpotifyError(f"cannot parse Spotify reference: {text!r}")
+
+
+# Historical name; still imported by older callers.
+playlist_uri = spotify_uri
 
 
 class Credentials:

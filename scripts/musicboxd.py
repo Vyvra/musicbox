@@ -521,6 +521,10 @@ class Controller:
         self.t0 = None            # when the stick appeared, for latency logging
         self.spotify = None       # Api, created on first Spotify stick
         self.librespot = None     # Librespot process wrapper
+        # What WE last played on the Spotify device. Needed because /me/player
+        # reports no context at all for audiobooks and podcasts (verified: context
+        # is null and item is {}), so "is this the same thing?" has no API answer.
+        self.last_played_uri = None
 
     # -- public
 
@@ -605,8 +609,11 @@ class Controller:
         # A musicbox.txt instruction outranks what is on the stick: it is the
         # explicit, deliberate override.
         commands = read_commands(mnt)
-        if commands.get("play_spotify_playlist"):
-            return self.begin_spotify(dev, mnt, commands["play_spotify_playlist"])
+        reference = (commands.get("play_spotify_playlist")
+                     or commands.get("spotify_audiobook")
+                     or commands.get("play_spotify"))
+        if reference:
+            return self.begin_spotify(dev, mnt, reference)
 
         tracks = scan_tracks(mnt, self.ext)
         if not tracks:
@@ -653,7 +660,7 @@ class Controller:
             self.ignored.add(dev)
             return False
         try:
-            uri = mbx_spotify.playlist_uri(reference)
+            uri = mbx_spotify.spotify_uri(reference)
         except mbx_spotify.SpotifyError as exc:
             LOG.error("unusable Spotify reference on %s: %s", dev, exc)
             self.ignored.add(dev)
@@ -676,14 +683,20 @@ class Controller:
                 self.librespot.start()
             stick.device_id = self.spotify.find_device(self.cfg["SPOTIFY_DEVICE_NAME"])
             context_uri, context_device = self.spotify.current_context()
-            if context_uri == uri and context_device == stick.device_id:
-                # Same playlist, same device: continue the paused playback rather than
-                # restarting it (re-sending context_uri resets to the start).
-                LOG.info("resuming the paused playlist on %r",
+            same_context = (context_uri == uri and context_device == stick.device_id)
+            # Audiobooks/podcasts hide their context, so fall back to our own record of
+            # what we last started on this device.
+            same_by_memory = (context_uri is None and self.last_played_uri == uri)
+            if same_context or same_by_memory:
+                # Continue the paused playback rather than restarting it: re-sending
+                # context_uri resets the position (measured, both for playlists and
+                # audiobooks).
+                LOG.info("resuming the paused Spotify item on %r",
                          self.cfg["SPOTIFY_DEVICE_NAME"])
                 self.spotify.resume(stick.device_id)
             else:
                 self.spotify.play_context(stick.device_id, uri)
+            self.last_played_uri = uri
             LOG.info("Spotify playback requested on %r (%s)",
                      self.cfg["SPOTIFY_DEVICE_NAME"], uri)
         except (mbx_spotify.SpotifyError, OSError, TimeoutError) as exc:
