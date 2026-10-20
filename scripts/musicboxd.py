@@ -39,8 +39,16 @@ LOG = logging.getLogger("musicboxd")
 
 DEFAULTS = {
     "MUSIC_EXT": "mp3,m4a,flac,ogg,opus,wav",
-    "VOLUME_DB": "-18",         # hardware volume in dB (preferred); see set_volume()
+    "VOLUME_DB": "-18",         # volume in dB (preferred); see set_volume()
     "VOLUME": "",               # legacy percentage, only if VOLUME_DB is empty
+    # Where the level lives. A HiFiBerry DAC+/Amp2 (PCM5122) has a hardware mixer, so
+    # the level survives a reboot and costs no CPU. A MAX98357A has *no* mixer at all:
+    # its gain is strapped in hardware, so the level has to come from an ALSA softvol
+    # plugin instead. Everything below is probe-then-configure so the same code drives
+    # both boards.
+    "VOLUME_CARD": "sndrpihifiberry",   # card name is the same for both HATs
+    "VOLUME_CONTROL": "",        # empty = auto-detect: Digital/PCM/Master, then softvol
+    "VOLUME_INIT_PCM": "",       # softvol boards: PCM to open once so the control exists
     # Spoken word is mastered much quieter than music, and the two paths have no shared
     # reference: librespot normalises within Spotify, local files are not normalised at
     # all. So each source gets its own level. Empty = fall back to VOLUME_DB.
@@ -299,21 +307,68 @@ def resolve_resume(tracks, mnt, record):
     return 0, 0.0
 
 
-def read_volume_db(card="sndrpihifiberry", ctl="Digital"):
-    """Current hardware level in dB, or None if it cannot be read."""
-    import re as _re
-    res = run(["amixer", "-c", card, "sget", ctl])
-    match = _re.search(r"\[(-?\d+(?:\.\d+)?)dB\]", res.stdout)
+def volume_controls(card):
+    """Every mixer control name on `card`; empty when the card has no mixer at all."""
+    return re.findall(r"'([^']+)'", run(["amixer", "-c", card, "scontrols"]).stdout)
+
+
+def resolve_volume_control(card, preferred=""):
+    """The control to drive: the configured one, else the first that exists.
+
+    Order matters. `Digital` is the PCM5122's hardware mixer (HiFiBerry DAC+/Amp2),
+    which is why it wins on that board. A MAX98357A has no mixer, so there the only
+    usable level is an ALSA softvol control, conventionally named after the PCM that
+    declared it (here: `Musicbox`).
+    """
+    if preferred:
+        return preferred
+    available = volume_controls(card)
+    for name in ("Digital", "PCM", "Master", "Softvol", "Musicbox"):
+        if name in available:
+            return name
+    return None
+
+
+def ensure_volume_control(card, ctl, init_pcm=""):
+    """Make sure a softvol control exists before anything tries to use it.
+
+    ALSA only creates a softvol control when its PCM is opened for the first time. On a
+    HiFiBerry the hardware mixer exists from boot, so this is a no-op. On a MAX98357A
+    the control is absent until something opens the PCM - and since the daemon sets the
+    level *before* starting playback, the first stick would otherwise play at the
+    plugin's default of 0 dB, i.e. full volume. Opening it once for 50 ms of silence
+    prevents a box that blasts the first time it is plugged in.
+    """
+    if resolve_volume_control(card, ctl):
+        return True
+    if not init_pcm:
+        return False
+    LOG.info("volume control absent; opening %s once so ALSA creates it", init_pcm)
+    run(["aplay", "-q", "-D", init_pcm, "--duration=0.05", "/dev/zero"])
+    present = resolve_volume_control(card, ctl) is not None
+    if not present:
+        LOG.warning("opened %s but no volume control appeared", init_pcm)
+    return present
+
+
+def read_volume_db(card=None, ctl=None):
+    """Current level in dB, or None if it cannot be read."""
+    card = card or DEFAULTS["VOLUME_CARD"]
+    control = resolve_volume_control(card, ctl or DEFAULTS["VOLUME_CONTROL"])
+    if control is None:
+        return None
+    res = run(["amixer", "-c", card, "sget", control])
+    match = re.search(r"\[(-?\d+(?:\.\d+)?)dB\]", res.stdout)
     return float(match.group(1)) if match else None
 
 
-def set_volume(percent="", decibels=""):
-    """Set the HAT's hardware volume ('Digital' on the PCM5122), found by card name.
+def set_volume(percent="", decibels="", card=None, ctl=None):
+    """Set the playback level, on whichever control this board actually has.
 
-    dB is preferred over a percentage: this mixer is logarithmic, so a percentage
-    is a poor proxy for loudness. Measured on the Amp2: 50% = -51.5 dB, 60% =
-    -41.5 dB, 75% = -26 dB, 90% = -10.5 dB, 100% = 0 dB (0.5 dB per raw step from
-    207). The default of -12 dB is comfortable and leaves room to turn up.
+    dB is preferred over a percentage: the PCM5122 mixer is logarithmic, so a
+    percentage is a poor proxy for loudness (measured on the Amp2: 50% = -51.5 dB,
+    75% = -26 dB, 90% = -10.5 dB, 100% = 0 dB). Softvol accepts dB just as well, so
+    the same values mean the same thing on both boards.
     """
     if decibels:
         value = f"{decibels}dB"
@@ -322,16 +377,20 @@ def set_volume(percent="", decibels=""):
     else:
         return
 
-    card = "sndrpihifiberry"
-    for ctl in ("Digital", "PCM", "Master"):
-        args = ["amixer", "-c", card, "sset", ctl]
-        if value.startswith("-"):
-            args.append("--")     # otherwise amixer reads -12dB as a switch
-        args += [value, "unmute"]
-        if run(args).returncode == 0:
-            LOG.info("hardware volume -> %s (%s)", value, ctl)
-            return
-    LOG.warning("no hardware volume control found on card %s", card)
+    card = card or DEFAULTS["VOLUME_CARD"]
+    control = resolve_volume_control(card, ctl or DEFAULTS["VOLUME_CONTROL"])
+    if control is None:
+        LOG.warning("no volume control on card %s; level left as it is", card)
+        return
+
+    args = ["amixer", "-c", card, "sset", control]
+    if value.startswith("-"):
+        args.append("--")         # otherwise amixer reads -12dB as a switch
+    args += [value, "unmute"]
+    if run(args).returncode == 0:
+        LOG.info("volume -> %s (%s)", value, control)
+        return
+    LOG.warning("could not set %s to %s on card %s", control, value, card)
 
 
 # --------------------------------------------------------------------------- mpv IPC
@@ -738,8 +797,7 @@ class Controller:
         if self.librespot and self.librespot.alive():
             LOG.info("stopping librespot to free the sound card for local playback")
             self.librespot.stop()
-        set_volume(self.cfg["VOLUME"],
-                   override_db if override_db is not None else self.cfg["VOLUME_DB"])
+        self.apply_volume(override_db if override_db is not None else self.cfg["VOLUME_DB"])
         if self.player is None:
             self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
                               self.cfg["MPV_EXTRA_ARGS"], self.cfg["PLAYLIST_FILE"])
@@ -785,7 +843,7 @@ class Controller:
 
         if volume_db is None:
             volume_db = self.volume_db_for(audiobook=audiobook)
-        set_volume(self.cfg["VOLUME"], volume_db)
+        self.apply_volume(volume_db)
         # Hand the sound card over: mpv and librespot cannot both own hw:.
         if self.player:
             self.player.stop()
@@ -920,6 +978,22 @@ class Controller:
                 LOG.warning("control %r failed: %s", command, exc)
                 return f"error: {exc}"
 
+    def read_level(self):
+        """Current dB, or None when this board exposes no readable mixer."""
+        return read_volume_db(self.cfg["VOLUME_CARD"], self.cfg["VOLUME_CONTROL"])
+
+    def apply_volume(self, db):
+        """Set the level, creating a softvol control first if this board needs one."""
+        try:
+            level = float(db)
+        except (TypeError, ValueError):
+            LOG.warning("ignoring unusable volume %r", db)
+            return
+        ensure_volume_control(self.cfg["VOLUME_CARD"], self.cfg["VOLUME_CONTROL"],
+                              self.cfg["VOLUME_INIT_PCM"])
+        set_volume(self.cfg["VOLUME"], f"{level:g}",
+                   self.cfg["VOLUME_CARD"], self.cfg["VOLUME_CONTROL"])
+
     def _control_volume(self, cmd):
         parts = cmd.split()
         if len(parts) == 2:
@@ -929,13 +1003,13 @@ class Controller:
                 return "error: volume needs a number, e.g. 'volume -12'"
         step = 3.0
         delta = step if cmd in ("volume-up", "volup", "louder") else -step
-        current = read_volume_db()
+        current = self.read_level()
         if current is None:
             return "error: cannot read the mixer"
         return self._set_level(max(-80.0, min(0.0, current + delta)))
 
     def _set_level(self, db):
-        set_volume(self.cfg["VOLUME"], f"{db:g}")
+        self.apply_volume(db)
         LOG.info("remote volume -> %g dB", db)
         return f"volume {db:g} dB"
 
@@ -1127,7 +1201,8 @@ def main():
         if not tracks:
             LOG.error("no playable files in %s", args.demo)
             return 1
-        set_volume(cfg["VOLUME"], cfg["VOLUME_DB"])
+        ensure_volume_control(cfg["VOLUME_CARD"], cfg["VOLUME_CONTROL"], cfg["VOLUME_INIT_PCM"])
+        set_volume(cfg["VOLUME"], cfg["VOLUME_DB"], cfg["VOLUME_CARD"], cfg["VOLUME_CONTROL"])
         player = Mpv(cfg["MPV_SOCKET"], cfg["AUDIO_DEVICE"], cfg["MPV_EXTRA_ARGS"],
                      cfg["PLAYLIST_FILE"])
         player.start(tracks, 0, 0.0, int(cfg["MAX_TRACKS"]))

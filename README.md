@@ -20,6 +20,17 @@ Power output scales with the supply: ~14 W/channel at 12 V into 4 Ω, ~28 W at 2
 8 Ω. HiFiBerry's recommended range is 12–20 V; 24 V is the absolute maximum. A 19 V
 laptop brick is a good, quiet choice for a child's room.
 
+### Standalone variant (Pi Zero W + I2S amplifier)
+
+A smaller standalone box is in preparation, built around a Pi Zero W and a MAX98357A
+(I2S DAC + 3 W class D) instead of the Amp2. Two consequences run through the code: a Pi
+Zero has **no audio jack at all**, so audio comes over I2S, and the MAX98357A has **no
+mixer**, so the volume has to live in ALSA softvol rather than the PCM5122's hardware
+register. Details, wiring and the ARMv6 caveats:
+**[docs/pi-zero-w-bringup.md](docs/pi-zero-w-bringup.md)**;
+`scripts/zero-w-setup.sh` applies the board-specific settings and refuses to run on
+anything that is not a Zero, because every change it makes is wrong for a real DAC.
+
 ## Behaviour
 
 | Event | What happens |
