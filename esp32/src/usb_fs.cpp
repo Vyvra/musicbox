@@ -50,11 +50,18 @@ class FatFileImpl : public FileImpl {
 
   bool seek(uint32_t pos, SeekMode mode) override {
     if (isDir_) return false;
-    size_t target = pos;
-    if (mode == SeekCur) target = pos_ + pos;
-    else if (mode == SeekEnd) target = (size_t)entry_.size + pos;
+    // The parameter is unsigned, so a backwards seek arrives as a large unsigned value.
+    // Do the maths signed, or "seek(-5, SeekCur)" wraps into a clamp to end-of-file -
+    // which is exactly the bug this arithmetic fixes.
+    int32_t delta = (int32_t)pos;
+    int64_t target;
+    if (mode == fs::SeekCur)      target = (int64_t)pos_ + delta;
+    else if (mode == fs::SeekEnd) target = (int64_t)entry_.size + delta;
+    else                          target = (int64_t)pos;
+    if (target < 0) target = 0;
     // Seeking past the end is legal for streams; clamp and report success.
-    pos_ = (target > entry_.size) ? entry_.size : target;
+    if (target > (int64_t)entry_.size) target = (int64_t)entry_.size;
+    pos_ = (size_t)target;
     return true;
   }
 

@@ -22,14 +22,18 @@ for spec in "fat16 16" "fat32 64"; do
   fsck.vfat -n "$TMP/$kind.img" | tail -1
 done
 
-echo "== compiling the reader for the host"
+echo "== compiling for the host (same sources the firmware uses)"
 g++ -std=c++17 -O2 -Wall -Wextra -o "$TMP/test_fat" test_fat.cpp ../../src/fat_reader.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
+    -o "$TMP/test_fs_adapter" test_fs_adapter.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
 
 status=0
 for kind in fat16 fat32; do
   echo
-  echo "== running against $kind"
+  echo "== fat_reader against $kind"
   "$TMP/test_fat" "$TMP/$kind.img" || status=1
+  echo "== fs::FS adapter against $kind"
+  "$TMP/test_fs_adapter" "$TMP/$kind.img" || status=1
 done
 
 echo

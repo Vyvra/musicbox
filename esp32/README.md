@@ -69,7 +69,7 @@ nothing about files. So:
 | --- | --- |
 | TinyUSB host + MSC | ✅ in the core, verified to link |
 | **FAT reader** (`src/fat_reader.cpp`) | ✅ written **and tested** — see below |
-| `fs::FS` adapter (`src/usb_fs.cpp`) | ✅ compiles, read-only, thin translation |
+| `fs::FS` adapter (`src/usb_fs.cpp`) | ✅ **host-tested** (see below), read-only |
 | MSC bring-up + `tuh_task` poll + hot-plug (`src/usb_stick.cpp`) | ✅ compiles and links |
 | Actually running on a board | ⬜ needs hardware |
 
@@ -94,9 +94,20 @@ for audio.
 ### Testing the FAT layer without hardware
 
 `test/host/run.sh` builds FAT16 and FAT32 images, validates them with **`fsck.vfat`** (a
-separate implementation), then compiles `fat_reader.cpp` *for the host* and reads them.
-30 checks: listing, long filenames with spaces and accents, nested directories, whole-file
-reads, offset reads across cluster boundaries, and clamping at end-of-file. Both images
+separate implementation), then compiles the firmware's own sources *for the host* and runs
+them: **78 checks**, all passing on both filesystems.
+
+- `test_fat.cpp` (15/image) — listing, long filenames with spaces and accents, nested
+directories, whole-file reads, offset reads across cluster boundaries, end-of-file clamping.
+- `test_fs_adapter.cpp` (24/image) — the `fs::FS` layer as audioI2S will use it: open, read,
+`size()`, `seek` in all three modes, position tracking, directory iteration, nested paths,
+missing files, and the read-only refusals. Arduino's FS types are stubbed in `stubs/FS.h`
+from the same contract the core exposes.
+
+The adapter test immediately earned its place: it caught `seek(Cur)` being wrong, because
+the API takes `uint32_t` and a backwards seek arrives as a large unsigned value — the
+arithmetic overflowed and clamped to end-of-file instead of moving back 5 bytes. That is
+precisely the call pattern resume-at-position uses. Both images
 pass, and both are `fsck`-clean (rc=0), so the reader is tested against spec-correct
 volumes rather than against its own assumptions.
 
