@@ -41,7 +41,7 @@ bool SpotifyBackend::begin(float volumeDb) {
   }
 
   session_ = g_factory();
-  if (!session_ || !session_->begin(uri_)) {
+  if (!session_ || !session_->begin(std::string(uri_.c_str()))) {
     // The reference is fine; the engine is not. Report both facts separately.
     problem_ = "Spotify engine failed to start for " + quote(uri_);
     session_.reset();

@@ -14,6 +14,8 @@ runs on our chip".
 | `files/idf_component.yml` | pulls `espressif/mdns` from the registry |
 | `files/sdkconfig.defaults.max98357a` | board config for the I2S amp build |
 | `files/MAX98357AAudioSink.{cpp,h}` | the new audio sink (39 + 24 lines) |
+| `files/spotify_session.h` | Arduino-free seam our firmware talks to |
+| `files/spotify_cspot.cpp` | the adapter: cspot -> ISpotifySession (verified to compile) |
 | `BUILD-NOTES.md` | the build log/notes from the session |
 
 ⚠️ `cspot/bell` (a submodule) has **no tracked changes** — the sink is two *new* files, so
@@ -57,10 +59,41 @@ multiply.
 `feedPCMFrames` is the only override needed: `BufferedAudioSink` supplies the ring buffer and
 the feed task.
 
+## Our adapter, and the one thing it must not do
+
+`files/spotify_cspot.cpp` maps the firmware's verbs onto `cspot::SpircHandler`:
+`subscribeToMercury` + `loadTrackFromURI`, `setPause`, `nextSong`/`previousSong`,
+`setRemoteVolume`.
+
+⚠️ **It deliberately does not call `setEventHandler`.** cspot's own target already installs
+a handler that drives the audio sink — it empties the ring buffer on `FLUSH`, `SEEK` and
+`PLAYBACK_START` — so replacing it would break playback in a way that looks like an audio
+bug. Instead the host forwards the single event we need:
+
+```cpp
+cspotAttach(handler);                        // after the SpircHandler exists
+setSpotifySessionFactory(cspotMakeSession);  // our backend now has an engine
+handler->setEventHandler([...](auto event) {
+    if (event->eventType == cspot::SpircHandler::EventType::PLAY_PAUSE) {
+        cspotNotifyPlayPause(std::get<bool>(event->data));   // bool == paused
+    }
+    ...the sink's existing handling stays untouched...
+});
+```
+
+`positionMs()` was added to cspot for this (the elapsed position otherwise sits in a private
+protobuf frame); `PLAY_PAUSE` carries `paused`, which is what makes remote-initiated pauses
+visible to our status line.
+
 ## What is still untested
 
 - **Runtime.** Nothing here proves it plays: mDNS advertising, SPIRC negotiation and the CDN
   fetch have only been exercised on x86 Linux (where they worked — see the session log).
+- **Linkage of our adapter.** It *compiles* inside cspot's target
+  (`build/esp-idf/main/CMakeFiles/__idf_main.dir/spotify_cspot.cpp.obj` exists, zero errors,
+  clean build), but the firmware image is byte-identical in size because nothing calls
+  `cspotAttach()` yet — the linker drops it. Wiring it in means our controller becomes the
+  target's `main`, which is the next step.
 - **PSRAM mode.** The board is octal (N16R8); the sdkconfig in the capture assumes otherwise
   in places.
 - **Partition size.** 1.74 MiB in a 2 MiB `factory` partition leaves 13 % — and the sdkconfig

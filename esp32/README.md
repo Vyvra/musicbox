@@ -139,7 +139,17 @@ The engine itself is plugged in through a factory, because cspot is an ESP-IDF *
 rather than a library this Arduino build can call. The board-side adapter — five `cspot::`
 calls (`subscribeToMercury`, `loadTrackFromURI`, `setPause`, `nextSong`/`previousSong`,
 `setRemoteVolume`) — lives in `integration/spotify_cspot.cpp`, outside `src/` on purpose so
-PlatformIO never tries to compile it. It is the one part still unverified.
+PlatformIO never tries to compile it. It **compiles inside cspot's target** (object built, zero errors) — and two details were
+resolved from cspot's source rather than guessed:
+
+- **remote-initiated pause**: cspot's `PLAY_PAUSE` event carries `paused`, so the host
+  forwards it (`cspotNotifyPlayPause`) instead of the adapter installing its own handler —
+  which would clobber the one that drives the audio sink's buffer on FLUSH/SEEK.
+- **elapsed position**: it lives in a private protobuf frame, so cspot gained a two-line
+  `positionMs()` accessor (recorded in the captured port).
+
+What remains is wiring, not code: our controller has to become cspot's `main` for the
+adapter to be linked (today the image size is unchanged because nothing calls `cspotAttach`).
 
 History, and why the seam once existed:
 **cspot itself was verified working on 2026-10-20**, so this is now a porting task rather

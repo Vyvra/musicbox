@@ -13,23 +13,10 @@
 #include <memory>
 
 #include "players.h"
+#include "spotify_session.h"
 
-class ISpotifySession {
- public:
-  virtual ~ISpotifySession() {}
-  virtual bool begin(const String& uri) = 0;        // connect and start this context
-  virtual void setPaused(bool paused) = 0;
-  virtual bool next() = 0;
-  virtual bool previous() = 0;
-  virtual bool playing() const = 0;
-  virtual uint32_t positionSeconds() const = 0;
-  virtual void setVolumePercent(uint8_t percent) = 0;
-  virtual void poll() = 0;
-};
-
-using SpotifySessionFactory = std::unique_ptr<ISpotifySession> (*)();
-
-// Installed by whoever links an engine. Passing nullptr restores the seam.
+// Installed by whoever links an engine (cspot on the board, a fake in tests).
+// Passing nullptr restores the honest seam.
 void setSpotifySessionFactory(SpotifySessionFactory factory);
 bool spotifyEngineAvailable();
 

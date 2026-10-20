@@ -30,7 +30,7 @@ static void expectEq(const std::string& got, const std::string& want,
 // ---------------------------------------------------------------- fake engine
 
 struct FakeSession : ISpotifySession {
-  String begunUri;
+  std::string begunUri;
   bool paused = true;
   bool playingFlag = false;
   int nextCount = 0;
@@ -40,7 +40,7 @@ struct FakeSession : ISpotifySession {
   uint32_t position = 0;
   bool beginResult = true;
 
-  bool begin(const String& uri) override {
+  bool begin(const std::string& uri) override {
     begunUri = uri;
     playingFlag = true;
     paused = false;
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
     SpotifyBackend backend("https://open.spotify.com/playlist/AAA?si=x");
     expect(backend.begin(-24.0f), "backend starts with an engine installed");
     expect(g_fake != nullptr, "factory produced a session");
-    expectEq(std::string(g_fake->begunUri.c_str()), "spotify:playlist:AAA",
+    expectEq(g_fake->begunUri, "spotify:playlist:AAA",
              "engine received the resolved URI");
     expect(g_fake->volumePercent == 6, "per-source default volume applied to the engine");
 
@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     backend.stop();
     expect(g_fake->paused, "stop pauses rather than disconnecting");
     expect(backend.problem().length() == 0, "a working backend reports no problem");
-    expect(g_fake->begunUri.length() > 0, "uri() is available for logging");
+    expect(!g_fake->begunUri.empty(), "the engine received a URI");
   }
 
   // A bad reference must fail before any engine is created.
@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
     Controller box(stick.storage.fs(), store);
     expect(box.begin(), "controller accepts a Spotify stick");
     expect(g_fake != nullptr, "controller created an engine session");
-    expectEq(std::string(g_fake->begunUri.c_str()), "spotify:playlist:5GStgmHQ6vYu2pyH1eo7EI",
+    expectEq(g_fake->begunUri, "spotify:playlist:5GStgmHQ6vYu2pyH1eo7EI",
              "controller passed the playlist from musicbox.txt");
     expect(g_fake->volumePercent == 6, "controller applied the Spotify default volume");
 

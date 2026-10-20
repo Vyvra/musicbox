@@ -1,3 +1,31 @@
+diff --git a/cspot/include/SpircHandler.h b/cspot/include/SpircHandler.h
+index 7d558cd..a785114 100644
+--- a/cspot/include/SpircHandler.h
++++ b/cspot/include/SpircHandler.h
+@@ -59,6 +59,10 @@ class SpircHandler {
+   void loadTrackFromURI(const std::string& uri);
+   std::shared_ptr<cspot::TrackQueue> getTrackQueue() { return trackQueue; }
+ 
++  // Added for the music-box integration: the elapsed position. cspot keeps it
++  // private inside its protobuf frame, and the box's status line needs it.
++  uint32_t positionMs() const;
++
+   void disconnect();
+ 
+  private:
+diff --git a/cspot/src/SpircHandler.cpp b/cspot/src/SpircHandler.cpp
+index 8d8add6..602ac91 100644
+--- a/cspot/src/SpircHandler.cpp
++++ b/cspot/src/SpircHandler.cpp
+@@ -308,3 +308,8 @@ void SpircHandler::sendEvent(EventType type, EventData data) {
+   event->data = data;
+   eventHandler(std::move(event));
+ }
++
++// Added for the music-box integration.
++uint32_t SpircHandler::positionMs() const {
++  return playbackState ? playbackState->innerFrame.state.position_ms : 0;
++}
 diff --git a/targets/esp32/CMakeLists.txt b/targets/esp32/CMakeLists.txt
 index fe3cb34..337bdd8 100644
 --- a/targets/esp32/CMakeLists.txt
