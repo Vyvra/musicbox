@@ -69,8 +69,22 @@ nothing about files. So:
 | --- | --- |
 | TinyUSB host + MSC | ✅ in the core, verified to link |
 | **FAT reader** (`src/fat_reader.cpp`) | ✅ written **and tested** — see below |
-| `fs::FS` adapter so audioI2S can open a path | ⬜ next |
-| MSC bring-up + `tuh_task` poll + hot-plug | ⬜ next |
+| `fs::FS` adapter (`src/usb_fs.cpp`) | ✅ compiles, read-only, thin translation |
+| MSC bring-up + `tuh_task` poll + hot-plug (`src/usb_stick.cpp`) | ✅ compiles and links |
+| Actually running on a board | ⬜ needs hardware |
+
+`usb_stick.cpp` wires the chain end to end: `tuh_msc_mount_cb` → block reader →
+`fat::Volume` → `fs::FS`. Plugging a stick *is* the insert event, so no card-detect switch
+is needed. Type `usb` on the serial console to print the volume and list the root
+**through `fs::FS`** — the same calls `scanMedia()` and audioI2S make, which is the
+on-hardware proof that the reader and the adapter agree.
+
+⚠️ **First thing to check on real hardware.** If `usb` reports *host not started*, the
+core's own USB **device** stack is probably claiming the controller (both live in
+`libarduino_tinyusb.a` and share one peripheral). CDC-on-boot is already off; the next
+lever is disabling the device side (sdkconfig `CONFIG_TINYUSB_CDC_ENABLED=n` or an
+explicit `USB.mode()` setting). This is the one link in the chain that cannot be tested
+without a board.
 
 ⚠️ **FAT only — not exFAT.** A stick formatted exFAT will not mount. Two of the three
 existing sticks (**MUSIC**, **VERHALEN**) are exFAT and must be reformatted as FAT32
