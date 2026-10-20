@@ -174,6 +174,39 @@ service that maps each detent to `musicboxctl volume-up|volume-down` (or a direc
 - Even when it works, this is the riskiest part of the board: Vorbis decode on one
   ARMv6 core. `SPOTIFY_BITRATE=96` is not cosmetic, it is what makes it plausible.
 
+### Built and verified (2026-10-20)
+
+`scripts/build-librespot-armv6.sh` produces the binary; it is self-contained (Docker +
+`cross` image, Rust and crate cache in named volumes) and **re-runnable — a rebuild came
+out byte-identical**, sha256 `2acfbb1d…419cb9f0`, 18.2 MiB.
+
+The script encodes two fixes that cost real time to find: Ubuntu noble renamed the armhf
+runtime package to **`libasound2t64`** (and the image pins armhf candidates to priority
+−1, so `apt-get download` cannot work), and `libasound.so` must be tolerated as an
+unresolved-import shared library (`-Wl,--allow-shlib-undefined`) because its symbols
+reference glibc 2.34 while the cross sysroot has 2.17.
+
+Evidence gathered:
+
+| check | result |
+| --- | --- |
+| `file` | `ELF 32-bit LSB pie, ARM, EABI5, dynamically linked`, `ld-linux-armhf.so.3` |
+| `readelf -h` | `Flags: 0x5000400, hard-float ABI` |
+| `NEEDED` | **`libasound.so.2`**, libc, libgcc_s, libm, libdl, ld-linux-armhf |
+| max glibc symbol | **GLIBC_2.16** (Pi OS Trixie provides 2.41) |
+| backends | `alsa (default)` only — no rodio/pulse to pull in |
+| under `qemu-arm -cpu arm1176` + Pi OS Trixie rootfs | `--version` OK, full daemon arg list accepted, `Using AlsaSink with format: S16`, and **TLS reached `apresolve.spotify.com`** → ring's crypto really executes on ARMv6 |
+| on real Pi hardware (3B+, `--device null`) | ran, `AlsaSink`, no card touched |
+
+⚠️ **`.ARM.attributes` says `v7 / VFPv3 / Thumb-2`, and that is expected**: the attributes
+are merged from `ring`'s perlasm assembly, which contains NEON routines. Those live in
+separately dispatched symbols gated on HWCAP and are never taken on ARMv6 — checked at the
+object level, where the ARMv4 objects hold no scalar v7 mnemonics. Do not "fix" the
+attributes; the gate is the runtime dispatch.
+
+Still unproven: **actual Spotify playback on a Zero W under load** — everything above
+proves it loads, links and speaks TLS, not that Vorbis decode keeps up.
+
 Installing it on the Zero W (`install.sh` does not install librespot — on the 3B+ it was
 added separately, and `/usr/bin/librespot` there is 0.8.0, 18.8 MB):
 
