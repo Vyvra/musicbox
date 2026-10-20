@@ -59,6 +59,9 @@ class Credentials:
                 self.data = json.load(fh)
         except FileNotFoundError:
             pass
+        except OSError as exc:
+            # Usually root-only 0600 permissions: say so instead of crashing.
+            LOG.warning("cannot read %s (%s); Spotify disabled", path, exc)
         except ValueError as exc:
             LOG.error("%s is not valid JSON: %s", path, exc)
 

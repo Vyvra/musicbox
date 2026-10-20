@@ -550,13 +550,13 @@ class Controller:
             LOG.warning("could not pre-start mpv (%s); will start on demand", exc)
 
         if mbx_spotify and self.cfg["LIBRESPOT_ALWAYS_ON"] == "1":
-            self._ensure_librespot()
             try:
+                self._ensure_librespot()
                 self.librespot.start()
                 LOG.info("librespot kept resident (LIBRESPOT_ALWAYS_ON=1); "
                          "the box is a Spotify Connect speaker too")
-            except OSError as exc:
-                LOG.warning("could not pre-start librespot: %s", exc)
+            except (OSError, mbx_spotify.SpotifyError, TimeoutError) as exc:
+                LOG.warning("could not pre-start librespot (%s); Spotify stays on demand", exc)
 
     def _ensure_librespot(self):
         if self.spotify is None:
@@ -623,6 +623,11 @@ class Controller:
         if start_pos:
             LOG.info("resuming '%s' at %.1fs", resume.get("track"), start_pos)
         self.stick.base_index = start_index
+        # librespot keeps the ALSA device open even when paused (measured), so a
+        # local stick must evict it or mpv cannot open the card at all.
+        if self.librespot and self.librespot.alive():
+            LOG.info("stopping librespot to free the sound card for local playback")
+            self.librespot.stop()
         set_volume(self.cfg["VOLUME"], self.cfg["VOLUME_DB"])
         if self.player is None:
             self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
@@ -736,6 +741,17 @@ class Controller:
                 self.player = None
         umount(stick.mnt)
         self.stick = None
+
+        # Bring the resident Connect speaker back now that the card is free again.
+        # Not on any latency-critical path, so the restart cost is invisible.
+        if (keep_warm and self.librespot is not None
+                and self.cfg["LIBRESPOT_ALWAYS_ON"] == "1"
+                and not self.librespot.alive()):
+            try:
+                self.librespot.start()
+                LOG.info("librespot restarted (resident again)")
+            except OSError as exc:
+                LOG.warning("could not restart librespot: %s", exc)
 
     # -- while playing
 
