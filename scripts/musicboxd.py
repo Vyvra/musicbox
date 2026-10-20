@@ -40,6 +40,11 @@ DEFAULTS = {
     "MUSIC_EXT": "mp3,m4a,flac,ogg,opus,wav",
     "VOLUME_DB": "-18",         # hardware volume in dB (preferred); see set_volume()
     "VOLUME": "",               # legacy percentage, only if VOLUME_DB is empty
+    # Spoken word is mastered much quieter than music, and the two paths have no shared
+    # reference: librespot normalises within Spotify, local files are not normalised at
+    # all. So each source gets its own level. Empty = fall back to VOLUME_DB.
+    "SPOTIFY_VOLUME_DB": "",
+    "AUDIOBOOK_VOLUME_DB": "-18",
     "AUDIO_DEVICE": "",          # empty = the ALSA default from /etc/asound.conf
     "MOUNT_POINT": "/run/musicbox",
     "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
@@ -609,11 +614,12 @@ class Controller:
         # A musicbox.txt instruction outranks what is on the stick: it is the
         # explicit, deliberate override.
         commands = read_commands(mnt)
-        reference = (commands.get("play_spotify_playlist")
-                     or commands.get("spotify_audiobook")
-                     or commands.get("play_spotify"))
-        if reference:
-            return self.begin_spotify(dev, mnt, reference)
+        playlist_ref = (commands.get("play_spotify_playlist")
+                        or commands.get("play_spotify"))
+        audiobook_ref = commands.get("spotify_audiobook")
+        if playlist_ref or audiobook_ref:
+            return self.begin_spotify(dev, mnt, playlist_ref or audiobook_ref,
+                                      audiobook=bool(audiobook_ref and not playlist_ref))
 
         tracks = scan_tracks(mnt, self.ext)
         if not tracks:
@@ -653,7 +659,13 @@ class Controller:
         self.report_latency()
         return True
 
-    def begin_spotify(self, dev, mnt, reference):
+    def volume_db_for(self, audiobook=False):
+        """Hardware level per source: spoken word needs more than music here."""
+        if audiobook:
+            return self.cfg["AUDIOBOOK_VOLUME_DB"] or self.cfg["VOLUME_DB"]
+        return self.cfg["SPOTIFY_VOLUME_DB"] or self.cfg["VOLUME_DB"]
+
+    def begin_spotify(self, dev, mnt, reference, audiobook=False):
         """Play a Spotify playlist: librespot provides the device, the Web API steers it."""
         if mbx_spotify is None:
             LOG.error("mbx_spotify.py is not installed; cannot honour %r", reference)
@@ -672,7 +684,7 @@ class Controller:
         stick.context_uri = uri
         self.stick = stick
 
-        set_volume(self.cfg["VOLUME"], self.cfg["VOLUME_DB"])
+        set_volume(self.cfg["VOLUME"], self.volume_db_for(audiobook=audiobook))
         # Hand the sound card over: mpv and librespot cannot both own hw:.
         if self.player:
             self.player.stop()

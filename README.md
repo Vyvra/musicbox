@@ -141,11 +141,28 @@ breaking older boxes. Currently one command exists:
 ```
 # Kids music box - command file
 play_spotify_playlist="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+spotify_audiobook="https://open.spotify.com/show/0UWnRumtt6JDnLOdpP6XB4"
 ```
 
-Plug it in and that playlist plays; pull it out and playback pauses (Spotify keeps the
-position, so re-inserting the same stick resumes it). A `musicbox.txt` **outranks** what
-else is on the stick — it is the deliberate override.
+Plug it in and that playlist/audiobook plays; pull it out and playback pauses
+(Spotify keeps the position, so re-inserting the same stick resumes it). A
+`musicbox.txt` **outranks** what else is on the stick — it is the deliberate override.
+Only one of the Spotify keys is used; if both are present `play_spotify_playlist` wins.
+
+### Audiobooks and podcasts
+
+These are addressed as **shows**, and two measured quirks matter:
+
+- `spotify:audiobook:<id>` is rejected with **400 "Invalid context uri"** — audiobooks
+  and podcasts must both be played as `spotify:show:<id>`. An `open.spotify.com/audiobook/…`
+  link is therefore rewritten to a `show` URI by the parser.
+- `/me/player` reports **no context and an empty item** while an episode plays
+  (`context: null`, `item: {}`), so "is this the same audiobook?" has no API answer.
+  The daemon therefore remembers what *it* last started on the device and uses that for
+  the resume decision when the context is hidden.
+
+Resume behaves identically to playlists (bare play continues, re-sending the context
+restarts): measured 10.6 s paused → 15.7 s after re-insertion.
 
 ### Why it needs two logins (and why that is not optional)
 
