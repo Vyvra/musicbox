@@ -49,6 +49,7 @@ DEFAULTS = {
     "MOUNT_POINT": "/run/musicbox",
     "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
     "PLAYLIST_FILE": "/run/musicbox.m3u8",  # same reason: it cannot live on the stick
+    "CONTROL_SOCKET": "/run/musicbox.ctl",  # remote control (keyboard/keypad)
     # --- Spotify (a stick can point at a playlist instead of holding audio) ---
     "SPOTIFY_DEVICE_NAME": "Musicbox",
     "SPOTIFY_CREDENTIALS": "/etc/musicbox/spotify.json",
@@ -264,6 +265,14 @@ def resolve_resume(tracks, mnt, record):
             return index, float(record.get("position") or 0)
     LOG.info("resume track '%s' is gone, starting at the beginning", wanted)
     return 0, 0.0
+
+
+def read_volume_db(card="sndrpihifiberry", ctl="Digital"):
+    """Current hardware level in dB, or None if it cannot be read."""
+    import re as _re
+    res = run(["amixer", "-c", card, "sget", ctl])
+    match = _re.search(r"\[(-?\d+(?:\.\d+)?)dB\]", res.stdout)
+    return float(match.group(1)) if match else None
 
 
 def set_volume(percent="", decibels=""):
@@ -554,6 +563,9 @@ class Controller:
         # is null and item is {}), so "is this the same thing?" has no API answer.
         # Persisted, otherwise a daemon restart makes an audiobook start over.
         self.last_played_uri = self._load_spotify_last()
+        # Control requests arrive on a socket thread while the main loop may be
+        # talking to mpv or Spotify; serialise both paths.
+        self._lock = threading.RLock()
 
     def _load_spotify_last(self):
         try:
@@ -578,17 +590,18 @@ class Controller:
 
     def reconcile(self, event_at=None):
         self.t0 = event_at or time.monotonic()
-        present = find_usb_partitions()
-        if self.stick and self.stick.dev not in present:
-            self.stop_stick("stick removed")
-        if self.stick is None:
-            for dev in present:
-                if dev in self.ignored:
-                    continue
-                if self.try_start(dev):
-                    break
-        if self.stick:
-            self.monitor()
+        with self._lock:
+            present = find_usb_partitions()
+            if self.stick and self.stick.dev not in present:
+                self.stop_stick("stick removed")
+            if self.stick is None:
+                for dev in present:
+                    if dev in self.ignored:
+                        continue
+                    if self.try_start(dev):
+                        break
+            if self.stick:
+                self.monitor()
 
     def warm_up(self):
         """Start mpv now so the first stick does not pay the 0.75 s spawn cost."""
@@ -840,6 +853,103 @@ class Controller:
             except OSError as exc:
                 LOG.warning("could not restart librespot: %s", exc)
 
+    # -- remote control -------------------------------------------------
+
+    def control(self, command):
+        """Handle one control request from the socket; returns a short reply."""
+        cmd = command.strip().lower()
+        with self._lock:
+            try:
+                if cmd.startswith("volume"):
+                    return self._control_volume(cmd)
+                stick = self.stick
+                if stick is None:
+                    return "idle: no stick"
+                if stick.kind == "spotify":
+                    return self._control_spotify(cmd, stick)
+                return self._control_local(cmd)
+            except Exception as exc:          # a bad keypress must not kill the daemon
+                LOG.warning("control %r failed: %s", command, exc)
+                return f"error: {exc}"
+
+    def _control_volume(self, cmd):
+        parts = cmd.split()
+        if len(parts) == 2:
+            try:
+                return self._set_level(float(parts[1]))
+            except ValueError:
+                return "error: volume needs a number, e.g. 'volume -12'"
+        step = 3.0
+        delta = step if cmd in ("volume-up", "volup", "louder") else -step
+        current = read_volume_db()
+        if current is None:
+            return "error: cannot read the mixer"
+        return self._set_level(max(-80.0, min(0.0, current + delta)))
+
+    def _set_level(self, db):
+        set_volume(self.cfg["VOLUME"], f"{db:g}")
+        LOG.info("remote volume -> %g dB", db)
+        return f"volume {db:g} dB"
+
+    def _control_local(self, cmd):
+        player = self.player
+        if player is None or not player.alive():
+            return "local player not running"
+        if cmd in ("next", "skip", "next-track"):
+            player.call("playlist-next")
+            return "next track"
+        if cmd in ("prev", "previous", "prev-track"):
+            player.call("playlist-prev")
+            return "previous track"
+        if cmd == "play":
+            player.call("set_property", "pause", False)
+            return "playing"
+        if cmd == "pause":
+            player.call("set_property", "pause", True)
+            return "paused"
+        if cmd in ("playpause", "toggle"):
+            player.call("cycle", "pause")
+            return "paused" if player.call("get_property", "pause") else "playing"
+        if cmd == "stop":
+            self.stop_stick("remote stop")
+            return "stopped"
+        if cmd == "status":
+            index, pos = self.current_position()
+            return f"local: track {index}, {pos or 0:.0f}s"
+        return f"unknown command {cmd!r}"
+
+    def _control_spotify(self, cmd, stick):
+        api = self.spotify
+        if api is None or not stick.device_id:
+            return "spotify not ready"
+        if cmd in ("next", "skip", "next-track"):
+            api.next_track(stick.device_id)
+            return "next track"
+        if cmd in ("prev", "previous", "prev-track"):
+            api.previous_track(stick.device_id)
+            return "previous track"
+        if cmd == "pause":
+            api.pause(stick.device_id)
+            return "paused"
+        if cmd == "play":
+            api.resume(stick.device_id)
+            return "playing"
+        if cmd in ("playpause", "toggle"):
+            cur = api.current() or {}
+            if cur.get("is_playing"):
+                api.pause(stick.device_id)
+                return "paused"
+            api.resume(stick.device_id)
+            return "playing"
+        if cmd == "stop":
+            self.stop_stick("remote stop")
+            return "stopped"
+        if cmd == "status":
+            cur = api.current() or {}
+            return (f"spotify: playing={cur.get('is_playing')} "
+                    f"{(cur.get('progress_ms') or 0)/1000:.0f}s")
+        return f"unknown command {cmd!r}"
+
     # -- while playing
 
     def current_position(self):
@@ -862,6 +972,10 @@ class Controller:
         stick = self.stick
         if stick is None:
             return
+        with self._lock:
+            self._monitor_locked(stick)
+
+    def _monitor_locked(self, stick):
 
         if stick.kind == "spotify":
             # librespot owns playback here; mpv is deliberately idle, so none of the
@@ -908,6 +1022,39 @@ def udev_events(out_queue, stop_event):
                 out_queue.put(line.strip())
     finally:
         proc.terminate()
+
+
+def control_server(path, controller, stop_event):
+    """Serve one-line control requests (used by the remote keypad/keyboard)."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(path)
+    os.chmod(path, 0o666)      # local-only path; the box has no untrusted users
+    srv.listen(8)
+    srv.settimeout(1.0)
+    LOG.info("control socket ready at %s", path)
+    while not stop_event.is_set():
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        with conn:
+            data = b""
+            while b"\n" not in data and len(data) < 8192:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            reply = controller.control(data.decode("utf-8", "replace"))
+            try:
+                conn.sendall((reply + "\n").encode())
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------------------- main
@@ -975,6 +1122,9 @@ def main():
     events = queue.Queue()
     stop_event = threading.Event()
     threading.Thread(target=udev_events, args=(events, stop_event), daemon=True).start()
+    threading.Thread(target=control_server,
+                     args=(cfg["CONTROL_SOCKET"], controller, stop_event),
+                     daemon=True).start()
 
     LOG.info("musicboxd up, waiting for a stick (mount point %s)", controller.mnt)
     interval = float(cfg["RECONCILE_INTERVAL"])

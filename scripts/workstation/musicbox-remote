@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Drive the music box from this keyboard's media keys.
+
+Reads the keyboard's "Consumer Control" device directly, so the keys work whatever
+window has focus (no KDE shortcut needed, and it does not steal keys from the
+desktop because the device is only read, not grabbed).
+
+Commands go to musicboxd on the Pi over a persistent SSH connection (ControlMaster),
+so a keypress does not pay for a new SSH handshake each time.
+"""
+import glob
+import os
+import struct
+import subprocess
+import sys
+import time
+
+DEVICE_NAME = "Mini Keyboard Consumer Control"
+HOST = "musicbox@musicbox.local"
+REMOTE = "/usr/local/bin/musicboxctl"
+CONTROL_PATH = "~/.cache/musicbox-ssh-%C"
+
+# linux/input-event-codes.h values this keyboard actually reports
+KEYS = {
+    164: "playpause",       # KEY_PLAYPAUSE
+    163: "next",            # KEY_NEXTSONG
+    165: "prev",            # KEY_PREVIOUSSONG
+    166: "stop",            # KEY_STOPCD
+    115: "volume-up",       # KEY_VOLUMEUP
+    114: "volume-down",     # KEY_VOLUMEDOWN
+}
+EVENT = struct.Struct("llHHi")     # time, time, type, code, value
+EV_KEY = 1
+DEBOUNCE = 0.15
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def find_device():
+    for path in sorted(glob.glob("/dev/input/event*")):
+        name_path = f"/sys/class/input/{os.path.basename(path)}/device/name"
+        try:
+            with open(name_path, encoding="utf-8", errors="replace") as fh:
+                if fh.read().strip() == DEVICE_NAME:
+                    return path
+        except OSError:
+            continue
+    return None
+
+
+def send(command):
+    started = time.monotonic()
+    try:
+        subprocess.run(
+            ["ssh", "-4", "-q", "-o", "BatchMode=yes",
+             "-o", "ControlMaster=auto",
+             "-o", f"ControlPath={CONTROL_PATH}",
+             "-o", "ControlPersist=600",
+             HOST, REMOTE, command],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        log(f"{command} ({time.monotonic() - started:.2f}s)")
+    except (subprocess.SubprocessError, OSError) as exc:
+        log(f"{command} failed: {exc}")
+
+
+def main():
+    last_seen = {}
+    while True:
+        device = find_device()
+        if device is None:
+            log(f"waiting for {DEVICE_NAME!r}...")
+            time.sleep(5)
+            continue
+        log(f"listening on {device}")
+        try:
+            with open(device, "rb") as fh:
+                while True:
+                    data = fh.read(EVENT.size)
+                    if not data:
+                        break
+                    _, _, etype, code, value = EVENT.unpack(data)
+                    if etype != EV_KEY or value != 1:
+                        continue          # ignore releases; 2 is auto-repeat
+                    command = KEYS.get(code)
+                    if not command:
+                        continue
+                    now = time.monotonic()
+                    if now - last_seen.get(code, 0) < DEBOUNCE:
+                        continue
+                    last_seen[code] = now
+                    send(command)
+        except OSError as exc:
+            log(f"device error ({exc}); reconnecting")
+            time.sleep(2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

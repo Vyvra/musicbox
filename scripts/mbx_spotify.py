@@ -218,6 +218,12 @@ class Api:
     def current(self):
         return self._call("GET", "/me/player")
 
+    def next_track(self, device_id):
+        self._call("POST", "/me/player/next", params={"device_id": device_id})
+
+    def previous_track(self, device_id):
+        self._call("POST", "/me/player/previous", params={"device_id": device_id})
+
     def wait_playing(self, device_id=None, timeout=6.0):
         """True once Spotify reports playback actually running.
 

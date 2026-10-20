@@ -142,12 +142,20 @@ breaking older boxes. Currently one command exists:
 # Kids music box - command file
 play_spotify_playlist="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 spotify_audiobook="https://open.spotify.com/show/0UWnRumtt6JDnLOdpP6XB4"
+default_volume="-12"
 ```
 
 Plug it in and that playlist/audiobook plays; pull it out and playback pauses
 (Spotify keeps the position, so re-inserting the same stick resumes it). A
 `musicbox.txt` **outranks** what else is on the stick — it is the deliberate override.
 Only one of the Spotify keys is used; if both are present `play_spotify_playlist` wins.
+
+**`default_volume`** sets the playback level for *this stick only*, in dB (`-80`..`0`,
+`-12` and `-12dB` are both accepted). It overrides both the per-source settings and
+`VOLUME_DB`, and applies to local MP3 sticks too. An unusable value is logged and
+ignored rather than applied, so a typo cannot leave the box silent or blaring.
+Measured: a stick asking for `-12` set the mixer to `-12.00 dB` where the audiobook
+fallback would have been `-15`.
 
 ### Audiobooks and podcasts
 
