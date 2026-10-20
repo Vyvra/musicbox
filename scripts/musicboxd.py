@@ -29,6 +29,11 @@ import sys
 import threading
 import time
 
+try:
+    import mbx_spotify
+except ImportError:          # Spotify is optional: local sticks must never break
+    mbx_spotify = None
+
 LOG = logging.getLogger("musicboxd")
 
 DEFAULTS = {
@@ -39,6 +44,13 @@ DEFAULTS = {
     "MOUNT_POINT": "/run/musicbox",
     "MPV_SOCKET": "/run/musicbox.sock",   # must NOT be inside MOUNT_POINT: that is mounted read-only
     "PLAYLIST_FILE": "/run/musicbox.m3u8",  # same reason: it cannot live on the stick
+    # --- Spotify (a stick can point at a playlist instead of holding audio) ---
+    "SPOTIFY_DEVICE_NAME": "Musicbox",
+    "SPOTIFY_CREDENTIALS": "/etc/musicbox/spotify.json",
+    "SPOTIFY_ALSA_DEVICE": "hw:CARD=sndrpihifiberry,DEV=0",
+    "SPOTIFY_BITRATE": "320",
+    "LIBRESPOT_BIN": "librespot",
+    "LIBRESPOT_CACHE": "/var/lib/musicbox/librespot",
     "MPV_EXTRA_ARGS": "",      # space-separated, e.g. --ao=null for testing without speakers
     "STATE_FILE": "/var/lib/musicbox/state.json",
     "RECONCILE_INTERVAL": "5",   # s, backstop poll in case a udev event is missed
@@ -112,6 +124,41 @@ def umount(mnt):
         time.sleep(0.3)
     LOG.warning("could not unmount %s", mnt)
     return False
+
+
+def read_commands(mnt):
+    """Parse musicbox.txt: simple key="value" lines, '#' comments.
+
+    Deliberately tiny and lenient — an adult creates this file by hand in a text
+    editor, so unknown keys are ignored and quoting is optional.
+    """
+    commands = {}
+    path = None
+    try:
+        for name in os.listdir(mnt):
+            if name.lower() == "musicbox.txt":
+                path = os.path.join(mnt, name)
+                break
+    except OSError:
+        return commands
+    if path is None:
+        return commands
+
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                value = value.strip().strip('"').strip("'")
+                commands[key.strip()] = value
+    except OSError as exc:
+        LOG.warning("could not read %s: %s", path, exc)
+        return commands
+
+    LOG.info("musicbox.txt commands: %s", ", ".join(sorted(commands)) or "(none)")
+    return commands
 
 
 def scan_tracks(mnt, extensions):
@@ -447,6 +494,9 @@ class Stick:
         self.mnt = mnt
         self.ident = ident
         self.tracks = tracks      # absolute paths, already sorted
+        self.kind = "local"       # or "spotify"
+        self.context_uri = ""     # spotify playlist/album uri
+        self.device_id = ""       # resolved per plug: Spotify ids are not stable
         self.base_index = 0       # absolute index of the first track handed to mpv
         self.finished = False
         self.last_pos = 0.0
@@ -465,6 +515,8 @@ class Controller:
         self.attempts = {}
         self.ignored = set()
         self.t0 = None            # when the stick appeared, for latency logging
+        self.spotify = None       # Api, created on first Spotify stick
+        self.librespot = None     # Librespot process wrapper
 
     # -- public
 
@@ -523,6 +575,12 @@ class Controller:
     def begin_stick(self, dev, mnt):
         """Scan, look up the resume point and start playing. Mount is the caller's job,
         so --simulate DIR can drive exactly the same code path without a stick."""
+        # A musicbox.txt instruction outranks what is on the stick: it is the
+        # explicit, deliberate override.
+        commands = read_commands(mnt)
+        if commands.get("play_spotify_playlist"):
+            return self.begin_spotify(dev, mnt, commands["play_spotify_playlist"])
+
         tracks = scan_tracks(mnt, self.ext)
         if not tracks:
             LOG.info("no playable files on %s, ignoring it", dev)
@@ -556,6 +614,58 @@ class Controller:
         self.report_latency()
         return True
 
+    def begin_spotify(self, dev, mnt, reference):
+        """Play a Spotify playlist: librespot provides the device, the Web API steers it."""
+        if mbx_spotify is None:
+            LOG.error("mbx_spotify.py is not installed; cannot honour %r", reference)
+            self.ignored.add(dev)
+            return False
+        try:
+            uri = mbx_spotify.playlist_uri(reference)
+        except mbx_spotify.SpotifyError as exc:
+            LOG.error("unusable Spotify reference on %s: %s", dev, exc)
+            self.ignored.add(dev)
+            return False
+
+        LOG.info("stick %s asks for Spotify: %s", dev, uri)
+        stick = Stick(dev, mnt, stick_identity(dev, mnt, []), [])
+        stick.kind = "spotify"
+        stick.context_uri = uri
+        self.stick = stick
+
+        set_volume(self.cfg["VOLUME"], self.cfg["VOLUME_DB"])
+        # Hand the sound card over: mpv and librespot cannot both own hw:.
+        if self.player:
+            self.player.stop()
+
+        try:
+            if self.spotify is None:
+                self.spotify = mbx_spotify.Api(
+                    mbx_spotify.Credentials(self.cfg["SPOTIFY_CREDENTIALS"]))
+                self.librespot = mbx_spotify.Librespot(
+                    binary=self.cfg["LIBRESPOT_BIN"],
+                    name=self.cfg["SPOTIFY_DEVICE_NAME"],
+                    device=self.cfg["SPOTIFY_ALSA_DEVICE"],
+                    cache_dir=self.cfg["LIBRESPOT_CACHE"],
+                    bitrate=self.cfg["SPOTIFY_BITRATE"])
+            self.librespot.start()
+            stick.device_id = self.spotify.find_device(self.cfg["SPOTIFY_DEVICE_NAME"])
+            self.spotify.play_context(stick.device_id, uri)
+            LOG.info("Spotify playback requested on %r (%s)",
+                     self.cfg["SPOTIFY_DEVICE_NAME"], uri)
+        except (mbx_spotify.SpotifyError, OSError, TimeoutError) as exc:
+            LOG.error("Spotify playback failed: %s", exc)
+            if self.librespot:
+                self.librespot.stop()
+            self.stick = None
+            self.ignored.add(dev)
+            return False
+
+        if self.t0 is not None:
+            LOG.info("Spotify handed over %.2fs after the stick appeared",
+                     time.monotonic() - self.t0)
+        return True
+
     def report_latency(self):
         """Log how long the child actually waited, instead of guessing."""
         if self.t0 is None or self.player is None:
@@ -574,6 +684,17 @@ class Controller:
         stick = self.stick
         if stick is None:
             return
+
+        if stick.kind == "spotify":
+            LOG.info("stopping Spotify (%s)", reason)
+            if self.spotify and stick.device_id:
+                self.spotify.pause(stick.device_id)   # Spotify keeps the position
+            if self.librespot:
+                self.librespot.stop()                 # release the sound card
+            umount(stick.mnt)
+            self.stick = None
+            return
+
         index, pos = self.current_position()
         LOG.info("stopping (%s) at track #%s, %.1fs", reason, index, pos or 0)
 

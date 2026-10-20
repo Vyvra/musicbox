@@ -153,8 +153,11 @@ Choices worth knowing:
 - **One long-lived mpv, not one process per plug.** Measured on the Pi 3B+: spawning mpv
   and connecting its IPC socket costs **0.72–0.76 s**; loading a file into an mpv that is
   already running costs **0.12 s** (still 0.12 s after 30 s idle). So the daemon
-  pre-starts mpv at boot and only loads files into it. Stick detected → audio is
-  **0.33–0.34 s**.
+  pre-starts mpv at boot and only loads files into it.
+- **The whole playlist is handed over as one m3u file, not one `loadfile` per track.**
+  Doing it per track cost an IPC round-trip each: 10 tracks measured **0.78 s** versus
+  **0.37 s** for a single playlist load, and that penalty grows with the number of files —
+  i.e. exactly backwards for a stick full of songs.
 - **The audio buffer is irrelevant to start latency** (0.88–0.90 s at 0.15/0.25/0.5 s), so
   it stays at 0.5 s for underrun safety rather than being traded for speed.
 - **`hifiberry-dacplus-std` vs `hifiberry-dacplus` — and why `install.sh` adds neither**
@@ -299,7 +302,9 @@ header, running the 32-bit `-v7` image — all fine for this job.
 | loadfile into a warm mpv | 0.12 s (still 0.12 s after 30 s idle) |
 | audio-buffer 0.15 / 0.25 / 0.5 s | 0.88–0.90 s cold at all three — **no effect**; that time was all process start |
 | udev settle (was a blanket 0.7 s) | now 0.10 s |
-| **stick detected → audio** | **0.33–0.34 s**, three consecutive plugs |
+| 10 tracks via N × `loadfile append` | 0.78 s — grew with the track count |
+| 10 tracks via one m3u load | 0.37 s |
+| **stick detected → audio** | **0.34 s** (1 track), **0.37 s** (10 tracks) |
 
 The lesson: measure the split before optimising. Shrinking the audio buffer or the udev
 settle would have bought ~0.6 s in total and risked crackle; keeping one mpv alive bought
