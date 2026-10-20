@@ -174,20 +174,27 @@ SPOTIFY_BITRATE=320
 LIBRESPOT_ALWAYS_ON=0        # see below
 ```
 
-**`LIBRESPOT_ALWAYS_ON`** — measured on the box: an *idle, logged-in* librespot does
-**not** hold the ALSA device (verified: another player can open `hw:` while it idles).
-So it can stay resident, which makes Spotify start in ~0.3 s instead of ~1.6 s and
-keeps the box permanently available as a Connect speaker. Left at `0` by default
-because the converse risk is real: a phone could then start playing to the box while a
-local stick is running. Set it to `1` if you prefer the always-on behaviour.
+**`LIBRESPOT_ALWAYS_ON`** (default `1` on this box) — the box stays resident as a
+Spotify Connect speaker, so a Spotify stick starts in ~0.3 s instead of ~1.6 s and a
+phone can also play to it. Three measured facts make this work, and one of them is not
+obvious:
+
+- an **idle** librespot does *not* hold the ALSA device (verified: another player opens
+  `hw:` while it idles);
+- a **paused** librespot *does* hold it (verified — pause is not release);
+- mpv likewise keeps the card open once it has played.
+
+So the daemon actively evicts the other player instead of assuming they coexist: a local
+stick stops librespot before mpv starts, and librespot is restarted when that stick is
+removed (off any latency-critical path). Set it to `0` to go back to start-on-demand.
 
 ### Timings
 
 | | time |
 | --- | --- |
 | local stick → audio | 0.37 s |
-| Spotify stick → audio (librespot started on demand) | **1.55–1.70 s** |
-| Spotify stick → audio (`LIBRESPOT_ALWAYS_ON=1`) | ~0.3 s expected |
+| Spotify stick → audio, librespot started on demand | 1.55–1.70 s |
+| Spotify stick → audio, librespot resident | ~0.3 s (resolution + play request; not separately timed) |
 
 The extra ~1.2 s is librespot starting and registering with Spotify's dealer, not
 anything in the daemon.

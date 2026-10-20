@@ -675,7 +675,15 @@ class Controller:
             if not self.librespot.alive():
                 self.librespot.start()
             stick.device_id = self.spotify.find_device(self.cfg["SPOTIFY_DEVICE_NAME"])
-            self.spotify.play_context(stick.device_id, uri)
+            context_uri, context_device = self.spotify.current_context()
+            if context_uri == uri and context_device == stick.device_id:
+                # Same playlist, same device: continue the paused playback rather than
+                # restarting it (re-sending context_uri resets to the start).
+                LOG.info("resuming the paused playlist on %r",
+                         self.cfg["SPOTIFY_DEVICE_NAME"])
+                self.spotify.resume(stick.device_id)
+            else:
+                self.spotify.play_context(stick.device_id, uri)
             LOG.info("Spotify playback requested on %r (%s)",
                      self.cfg["SPOTIFY_DEVICE_NAME"], uri)
         except (mbx_spotify.SpotifyError, OSError, TimeoutError) as exc:

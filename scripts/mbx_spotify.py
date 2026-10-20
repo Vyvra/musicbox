@@ -177,8 +177,24 @@ class Api:
             f"(visible devices: {names})")
 
     def play_context(self, device_id, context_uri):
+        """Start a context. NOTE: this always begins the context from its start.
+
+        Measured on the box: re-sending context_uri after a pause reset progress from
+        12.7 s to 3.1 s, while a bare play carried on from 15.6 s to 18.7 s. So resume
+        must not go through here.
+        """
         self._call("PUT", "/me/player/play",
                    body={"context_uri": context_uri}, params={"device_id": device_id})
+
+    def resume(self, device_id):
+        """Continue whatever this device was playing, keeping the position."""
+        self._call("PUT", "/me/player/play", params={"device_id": device_id})
+
+    def current_context(self):
+        """(context_uri, device_id) of whatever Spotify is paused/playing on."""
+        cur = self.current() or {}
+        return ((cur.get("context") or {}).get("uri"),
+                (cur.get("device") or {}).get("id"))
 
     def pause(self, device_id):
         try:
