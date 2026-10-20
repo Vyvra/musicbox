@@ -143,6 +143,7 @@ breaking older boxes. Currently one command exists:
 play_spotify_playlist="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 spotify_audiobook="https://open.spotify.com/show/0UWnRumtt6JDnLOdpP6XB4"
 default_volume="-12"
+shuffle="on"
 ```
 
 Plug it in and that playlist/audiobook plays; pull it out and playback pauses
@@ -156,6 +157,25 @@ Only one of the Spotify keys is used; if both are present `play_spotify_playlist
 ignored rather than applied, so a typo cannot leave the box silent or blaring.
 Measured: a stick asking for `-12` set the mixer to `-12.00 dB` where the audiobook
 fallback would have been `-15`.
+
+**`shuffle`** (`on`/`off`, also `yes`/`no`/`true`/`false`/`1`/`0`) sets shuffle for that
+stick, on both backends:
+
+- **Spotify playlists:** `PUT /me/player/shuffle` after playback starts, because the
+  setting applies to the active session. Verified at Spotify's end — `/me/player`
+  reported `shuffle_state: true`, not just our own log line.
+- **Local MP3 sticks:** the track list is reordered in the daemon (resume track first,
+  the rest randomised) rather than handing mpv `--shuffle`, so the resume bookkeeping
+  (`base_index` + mpv's playlist index) keeps pointing at the track that is really
+  playing.
+
+`shuffle="off"` is meaningful, not just the absence of `on`: an account left in shuffle
+from a phone would otherwise silently randomise a stick that asks for in-order playback.
+Shuffle is re-applied on every insert, so each session starts from a fresh order at the
+resumed track. An unrecognised value is logged and ignored — it never guesses.
+
+Note: shuffling an **audiobook** stick would scatter the episodes, which is almost
+certainly not wanted; the box honours it if asked, so leave `shuffle` off those.
 
 ### Audiobooks and podcasts
 
@@ -298,16 +318,27 @@ commands to musicboxd's local socket.
 
 | key | command |
 | --- | --- |
-| PLAYPAUSE | `playpause` |
-| NEXTSONG | `next` |
-| PREVIOUSSONG | `prev` |
+| PLAYPAUSE / **Space** | `playpause` |
+| NEXTSONG / **→** | `next` |
+| PREVIOUSSONG / **←** | `prev` |
 | STOPCD | `stop` |
-| VOLUMEUP / VOLUMEDOWN | ±3 dB of hardware level |
+| VOLUMEUP / **↑** | +3 dB of hardware level |
+| VOLUMEDOWN / **↓** | −3 dB of hardware level |
 
-The service matches any device whose name contains `Consumer Control`, so a replacement
-keyboard works unchanged, and it waits patiently when none is attached. It **reads** the
-device without grabbing it — the trade-off is that it cannot stop another consumer of
-those keys.
+The ordinary keys exist because the media row on this keyboard is awkward to reach.
+They live on a **different input interface** than the media keys, so both are read:
+`event1` (main keys) and `event4` (Consumer Control), with the touchpad ignored. The
+Consumer Control interface also advertises the arrow codes, so one physical press can
+arrive twice — commands are debounced per key code (150 ms), which collapses it. Verified:
+one press gives exactly one action.
+
+Holding a key does **not** repeat: auto-repeat events are ignored, so volume moves in
+3 dB steps per press rather than ramping.
+
+The service matches any device whose name contains `Keyboard` (excluding the mouse
+interface), so a replacement keyboard works unchanged, and it waits patiently when none is
+attached. It **reads** the devices without grabbing them — the trade-off is that it cannot
+stop another consumer of those keys.
 
 ### musicboxctl
 

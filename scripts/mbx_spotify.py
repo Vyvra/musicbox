@@ -230,6 +230,17 @@ class Api:
     def previous_track(self, device_id):
         self._call("POST", "/me/player/previous", params={"device_id": device_id})
 
+    def set_shuffle(self, device_id, enabled):
+        """Turn shuffle on/off for the active playback on this device.
+
+        Applies to the running session, so it has to be called after playback
+        starts. Setting it off explicitly matters too: the account may already
+        have shuffle enabled from the desktop or phone app.
+        """
+        self._call("PUT", "/me/player/shuffle",
+                   params={"state": "true" if enabled else "false",
+                           "device_id": device_id})
+
     def wait_playing(self, device_id=None, timeout=6.0):
         """True once Spotify reports playback actually running.
 

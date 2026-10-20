@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import queue
+import random
 import re
 import shlex
 import shutil
@@ -192,6 +193,37 @@ def parse_volume_db(text):
         LOG.warning("default_volume %sdB is outside -80..0; ignoring it", value)
         return None
     return value
+
+
+def parse_shuffle(text):
+    """Parse shuffle=on/off from musicbox.txt; None when absent or unclear.
+
+    'off' is meaningful, not just the absence of 'on': the Spotify account may
+    already have shuffle enabled from a phone, and a stick that asks for in-order
+    playback has to be able to say so.
+    """
+    if not text:
+        return None
+    raw = text.strip().lower()
+    if raw in ("on", "true", "yes", "1"):
+        return True
+    if raw in ("off", "false", "no", "0"):
+        return False
+    LOG.warning("shuffle %r is not on/off; ignoring it", text)
+    return None
+
+
+def shuffled_from(tracks, start_index):
+    """Resume track first, everything else in random order.
+
+    Pure on purpose: the caller reshuffles the track list itself (not just what mpv
+    is handed) because resume bookkeeping uses base_index + mpv's playlist index, so
+    the two orders must agree or the wrong track gets saved.
+    """
+    head = tracks[start_index]
+    rest = tracks[:start_index] + tracks[start_index + 1:]
+    random.shuffle(rest)
+    return [head] + rest
 
 
 def scan_tracks(mnt, extensions):
@@ -671,13 +703,14 @@ class Controller:
         # explicit, deliberate override.
         commands = read_commands(mnt)
         override_db = parse_volume_db(commands.get("default_volume"))
+        shuffle = parse_shuffle(commands.get("shuffle"))
         playlist_ref = (commands.get("play_spotify_playlist")
                         or commands.get("play_spotify"))
         audiobook_ref = commands.get("spotify_audiobook")
         if playlist_ref or audiobook_ref:
             return self.begin_spotify(dev, mnt, playlist_ref or audiobook_ref,
                                       audiobook=bool(audiobook_ref and not playlist_ref),
-                                      volume_db=override_db)
+                                      volume_db=override_db, shuffle=shuffle)
 
         tracks = scan_tracks(mnt, self.ext)
         if not tracks:
@@ -686,11 +719,17 @@ class Controller:
             return False
 
         ident = stick_identity(dev, mnt, tracks)
-        self.stick = Stick(dev, mnt, ident, tracks)
-        LOG.info("stick %s (%s): %d track(s)", dev, ident, len(tracks))
 
         resume = self.state.get(ident) or {}
         start_index, start_pos = resolve_resume(tracks, mnt, resume)
+        if shuffle:
+            tracks = shuffled_from(tracks, start_index)
+            start_index = 0
+            LOG.info("shuffle is on: %d track(s) in random order", len(tracks))
+
+        self.stick = Stick(dev, mnt, ident, tracks)
+        LOG.info("stick %s (%s): %d track(s)", dev, ident, len(tracks))
+
         if start_pos:
             LOG.info("resuming '%s' at %.1fs", resume.get("track"), start_pos)
         self.stick.base_index = start_index
@@ -724,7 +763,8 @@ class Controller:
             return self.cfg["AUDIOBOOK_VOLUME_DB"] or self.cfg["VOLUME_DB"]
         return self.cfg["SPOTIFY_VOLUME_DB"] or self.cfg["VOLUME_DB"]
 
-    def begin_spotify(self, dev, mnt, reference, audiobook=False, volume_db=None):
+    def begin_spotify(self, dev, mnt, reference, audiobook=False, volume_db=None,
+                      shuffle=None):
         """Play a Spotify playlist: librespot provides the device, the Web API steers it."""
         if mbx_spotify is None:
             LOG.error("mbx_spotify.py is not installed; cannot honour %r", reference)
@@ -776,6 +816,14 @@ class Controller:
             else:
                 self.spotify.play_context(stick.device_id, uri)
             self._remember_spotify(uri)
+            if shuffle is not None:
+                # After playback starts: it applies to the active session. Kept in its
+                # own try so a refused shuffle never costs us the playback itself.
+                try:
+                    self.spotify.set_shuffle(stick.device_id, shuffle)
+                    LOG.info("Spotify shuffle -> %s", "on" if shuffle else "off")
+                except mbx_spotify.SpotifyError as exc:
+                    LOG.warning("could not set Spotify shuffle: %s", exc)
             LOG.info("Spotify playback requested on %r (%s)",
                      self.cfg["SPOTIFY_DEVICE_NAME"], uri)
         except (mbx_spotify.SpotifyError, OSError, TimeoutError) as exc:
