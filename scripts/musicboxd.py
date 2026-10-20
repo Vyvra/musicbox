@@ -171,6 +171,28 @@ def read_commands(mnt):
     return commands
 
 
+def parse_volume_db(text):
+    """Parse a level from musicbox.txt: '-12' or '-12dB' -> -12.0.
+
+    Returns None when the value is missing or unusable, so a typo in the file can
+    never leave the box silent or unexpectedly loud.
+    """
+    if not text:
+        return None
+    raw = text.strip().lower()
+    if raw.endswith("db"):
+        raw = raw[:-2].strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        LOG.warning("default_volume %r is not a number; ignoring it", text)
+        return None
+    if not -80.0 <= value <= 0.0:
+        LOG.warning("default_volume %sdB is outside -80..0; ignoring it", value)
+        return None
+    return value
+
+
 def scan_tracks(mnt, extensions):
     tracks = []
     for root, dirs, names in os.walk(mnt):
@@ -635,12 +657,14 @@ class Controller:
         # A musicbox.txt instruction outranks what is on the stick: it is the
         # explicit, deliberate override.
         commands = read_commands(mnt)
+        override_db = parse_volume_db(commands.get("default_volume"))
         playlist_ref = (commands.get("play_spotify_playlist")
                         or commands.get("play_spotify"))
         audiobook_ref = commands.get("spotify_audiobook")
         if playlist_ref or audiobook_ref:
             return self.begin_spotify(dev, mnt, playlist_ref or audiobook_ref,
-                                      audiobook=bool(audiobook_ref and not playlist_ref))
+                                      audiobook=bool(audiobook_ref and not playlist_ref),
+                                      volume_db=override_db)
 
         tracks = scan_tracks(mnt, self.ext)
         if not tracks:
@@ -662,7 +686,8 @@ class Controller:
         if self.librespot and self.librespot.alive():
             LOG.info("stopping librespot to free the sound card for local playback")
             self.librespot.stop()
-        set_volume(self.cfg["VOLUME"], self.cfg["VOLUME_DB"])
+        set_volume(self.cfg["VOLUME"],
+                   override_db if override_db is not None else self.cfg["VOLUME_DB"])
         if self.player is None:
             self.player = Mpv(self.cfg["MPV_SOCKET"], self.cfg["AUDIO_DEVICE"],
                               self.cfg["MPV_EXTRA_ARGS"], self.cfg["PLAYLIST_FILE"])
@@ -686,7 +711,7 @@ class Controller:
             return self.cfg["AUDIOBOOK_VOLUME_DB"] or self.cfg["VOLUME_DB"]
         return self.cfg["SPOTIFY_VOLUME_DB"] or self.cfg["VOLUME_DB"]
 
-    def begin_spotify(self, dev, mnt, reference, audiobook=False):
+    def begin_spotify(self, dev, mnt, reference, audiobook=False, volume_db=None):
         """Play a Spotify playlist: librespot provides the device, the Web API steers it."""
         if mbx_spotify is None:
             LOG.error("mbx_spotify.py is not installed; cannot honour %r", reference)
@@ -705,7 +730,9 @@ class Controller:
         stick.context_uri = uri
         self.stick = stick
 
-        set_volume(self.cfg["VOLUME"], self.volume_db_for(audiobook=audiobook))
+        if volume_db is None:
+            volume_db = self.volume_db_for(audiobook=audiobook)
+        set_volume(self.cfg["VOLUME"], volume_db)
         # Hand the sound card over: mpv and librespot cannot both own hw:.
         if self.player:
             self.player.stop()

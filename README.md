@@ -164,6 +164,12 @@ These are addressed as **shows**, and two measured quirks matter:
 Resume behaves identically to playlists (bare play continues, re-sending the context
 restarts): measured 10.6 s paused → 15.7 s after re-insertion.
 
+The exception is a **daemon restart or reboot**: that restarts librespot too, which drops
+the device session and with it the paused position. The daemon detects that the resume
+started nothing and falls back to starting the context, so the chapter restarts instead
+of the box sitting in silence. Verified: `resume started nothing; starting the context
+instead` → playback at 6.0 s.
+
 ### Why it needs two logins (and why that is not optional)
 
 | | what it is for | lifetime |
