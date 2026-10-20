@@ -111,14 +111,34 @@ field offsets (0x30/0x32, not 0x28/0x2A) and the extended-BPB signature were all
 
 ### Spotify
 
-Implemented as a **seam, not a stub that pretends**: `SpotifyPlayer` exists, reports
-`Spotify is not implemented on this build`, and `status` says so. The reason is in the
-research: the only ESP32 Spotify Connect client is
-[cspot](https://github.com/feelfreelinux/cspot), whose last master commit was
-**2024-07-12**, which has open 2026 reports of `Cannot fetch CDN URL` (tracks failing to
-load) and of not building at all — **with no maintainer reply**. Wiring that in would
-produce a backend that compiles and stays silent. The class is where a working client
-would go if one appears.
+`SpotifyPlayer` is still a seam rather than an implementation, but the reason has changed:
+**cspot itself was verified working on 2026-10-20**, so this is now a porting task rather
+than a dead end.
+
+Evidence, from a Linux build of cspot (Debian trixie, mbedTLS 3.6.6) connected to a real
+Premium account:
+
+```
+TrackQueue.cpp:256: Got audio key
+TrackQueue.cpp:279: Received access key, fetching CDN URL...
+TrackQueue.cpp:305: Received CDN URL, https://audio-fa-tls130.spotifycdn.com/audio/…
+CDNAudioFile.cpp:70: Header and footer bytes received
+TrackQueue.cpp:162: Track name: Ola ole olee
+```
+
+12 CDN fetches, **zero errors in 378 log lines**. The `Cannot fetch CDN URL` failure that
+the project's 2026 issues report simply did not occur, so those reports are environment-
+or build-specific, not a broken control plane. The repository is still unmaintained (last
+master commit 2024-07-12), which is a risk to plan around — but the protocol still works.
+
+⚠️ **The mbedTLS trap, and why it is good news for this port:** desktop mbedTLS **4**
+removed `ctr_drbg.h`, `entropy.h`, `aes.h`, `bignum.h`, `pkcs5.h` and
+`mbedtls_ssl_conf_rng`; building against it fails and would need a PSA-crypto rewrite.
+**ESP-IDF ships mbedTLS 3.x**, which is what cspot expects — the desktop problem does not
+apply to the board.
+
+So the remaining work is: build the `targets/esp32` target under ESP-IDF, and provide an
+audio sink for the MAX98357A (plain I2S; the existing PCM5102 sink is the obvious model).
 
 ### Hardware volume
 
