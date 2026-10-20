@@ -1,0 +1,7 @@
+# sdkconfig overrides: MAX98357A I2S amp instead of the default AC101 codec.
+# Use with: idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.max98357a" build
+CONFIG_CSPOT_SINK_MAX98357A=y
+# CONFIG_CSPOT_SINK_AC101 is not set
+CONFIG_CSPOT_MAX98357A_BCLK_GPIO=4
+CONFIG_CSPOT_MAX98357A_LRC_GPIO=5
+CONFIG_CSPOT_MAX98357A_DIN_GPIO=6

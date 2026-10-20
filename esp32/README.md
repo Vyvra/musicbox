@@ -155,8 +155,17 @@ removed `ctr_drbg.h`, `entropy.h`, `aes.h`, `bignum.h`, `pkcs5.h` and
 **ESP-IDF ships mbedTLS 3.x**, which is what cspot expects — the desktop problem does not
 apply to the board.
 
-So the remaining work is: build the `targets/esp32` target under ESP-IDF, and provide an
-audio sink for the MAX98357A (plain I2S; the existing PCM5102 sink is the obvious model).
+**And it compiles for the target.** With four patch hunks and a 39-line audio sink,
+`idf.py build --target esp32s3` completes on **ESP-IDF v5.1.2** in 48 s, producing a
+**1.74 MiB** binary. ESP-IDF ships **mbedTLS 3.5.0**, confirming the assumption above.
+
+The captured port — patch, new files, and the reasoning for each fix — is in
+**[docs/cspot-esp32-port/](docs/cspot-esp32-port/)**. Two real defects turned up on the way:
+cspot's Kconfig sink selection was dead code (hardcoded to `ES8311AudioSink`), and
+`PCM5102AudioSink` hardcodes pins 27/32, which on the S3 are the **flash/PSRAM** pins.
+
+What remains is runtime, not porting: mDNS/SPIRC/CDN on the chip, PSRAM in octal mode, a
+partition sized for 16 MB flash, and wiring cspot into the controller.
 
 ### Hardware volume
 

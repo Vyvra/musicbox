@@ -1,0 +1,6 @@
+## IDF Component Manager manifest
+## Needed for ESP-IDF 5.x: mDNS was removed from the IDF tree (components/mdns) and
+## moved to the component registry in IDF v5.0/5.1.
+dependencies:
+  idf: ">=5.0"
+  espressif/mdns: "^1.2.0"

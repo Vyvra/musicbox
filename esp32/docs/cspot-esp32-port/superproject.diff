@@ -1,0 +1,153 @@
+diff --git a/targets/esp32/CMakeLists.txt b/targets/esp32/CMakeLists.txt
+index fe3cb34..337bdd8 100644
+--- a/targets/esp32/CMakeLists.txt
++++ b/targets/esp32/CMakeLists.txt
+@@ -5,7 +5,11 @@ cmake_minimum_required(VERSION 3.5)
+ # Don't override EXTRA_COMPONENT_DIRS as platformio uses it.  Instead we append
+ # see https://github.com/platformio/platform-espressif32/issues/341
+ list(APPEND EXTRA_COMPONENT_DIRS $ENV{IDF_PATH}/examples/common_components/protocol_examples_common)
+-list(APPEND EXTRA_COMPONENT_DIRS $ENV{IDF_PATH}/examples/common_components/led_strip)
++# led_strip was removed from IDF examples/common_components in IDF 5.x (now a managed
++# component whose 2.x API differs). Only needed for CONFIG_CSPOT_STATUS_LED_TYPE_RMT.
++if(EXISTS $ENV{IDF_PATH}/examples/common_components/led_strip)
++    list(APPEND EXTRA_COMPONENT_DIRS $ENV{IDF_PATH}/examples/common_components/led_strip)
++endif()
+ 
+ if(NOT IDF_NO_INCLUDE)
+     include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+diff --git a/targets/esp32/main/ESPStatusLed.h b/targets/esp32/main/ESPStatusLed.h
+index 14cc090..8e9996f 100644
+--- a/targets/esp32/main/ESPStatusLed.h
++++ b/targets/esp32/main/ESPStatusLed.h
+@@ -6,8 +6,11 @@
+ #include "freertos/task.h"
+ #include "driver/gpio.h"
+ #include "esp_log.h"
+-#include "led_strip.h"
+ #include "sdkconfig.h"
++// Only the RMT status-LED option needs led_strip (a managed component in IDF 5.x).
++#ifdef CONFIG_CSPOT_STATUS_LED_TYPE_RMT
++#include "led_strip.h"
++#endif
+ 
+ #define CSPOT_STATUS_LED_GPIO (gpio_num_t)CONFIG_CSPOT_STATUS_LED_GPIO
+ 
+diff --git a/targets/esp32/main/Kconfig.projbuild b/targets/esp32/main/Kconfig.projbuild
+index b0a4663..add44a8 100644
+--- a/targets/esp32/main/Kconfig.projbuild
++++ b/targets/esp32/main/Kconfig.projbuild
+@@ -24,8 +24,27 @@ menu "CSPOT Configuration"
+             bool "PCM5102"
+         config CSPOT_SINK_TAS5711
+             bool "TAS5711"
++        config CSPOT_SINK_MAX98357A
++            bool "MAX98357A (plain I2S amp, no MCLK)"
+     endchoice
+ 
++    config CSPOT_MAX98357A_BCLK_GPIO
++        int "MAX98357A BCLK GPIO"
++        range 0 48
++        default 4
++        help
++            I2S bit clock. Avoid GPIO26-37 (SPI flash/PSRAM) on ESP32-S3.
++
++    config CSPOT_MAX98357A_LRC_GPIO
++        int "MAX98357A LRC (word select) GPIO"
++        range 0 48
++        default 5
++
++    config CSPOT_MAX98357A_DIN_GPIO
++        int "MAX98357A DIN (data) GPIO"
++        range 0 48
++        default 6
++
+     choice CSPOT_QUALITY
+         prompt "Audio Quality (BPS)"
+         default CSPOT_QUALITY_320
+diff --git a/targets/esp32/main/main.cpp b/targets/esp32/main/main.cpp
+index 8e51880..818b2fc 100644
+--- a/targets/esp32/main/main.cpp
++++ b/targets/esp32/main/main.cpp
+@@ -6,6 +6,7 @@
+ #include <atomic>
+ #include <memory>
+ #include <string>
++#include <string_view>
+ #include "BellHTTPServer.h"
+ #include "BellTask.h"
+ #include "civetweb.h"
+@@ -24,6 +25,7 @@
+ #include <CSpotContext.h>
+ #include <LoginBlob.h>
+ #include <SpircHandler.h>
++#include <TrackPlayer.h>
+ 
+ #include <inttypes.h>
+ #include "BellTask.h"
+@@ -56,6 +58,10 @@
+ #ifdef CONFIG_CSPOT_SINK_TAS5711
+ #include <TAS5711AudioSink.h>
+ #endif
++#ifdef CONFIG_CSPOT_SINK_MAX98357A
++#include <MAX98357AAudioSink.h>
++#endif
++#include "AudioSink.h"
+ 
+ static const char* TAG = "cspot";
+ 
+@@ -70,7 +76,7 @@ void app_main(void);
+ class CSpotPlayer : public bell::Task {
+  private:
+   std::shared_ptr<cspot::SpircHandler> handler;
+-  std::unique_ptr<ES8311AudioSink> audioSink;
++  std::unique_ptr<AudioSink> audioSink;
+   std::unique_ptr<bell::CircularBuffer> circularBuffer;
+   std::atomic<bool> isPaused;
+ 
+@@ -78,7 +84,24 @@ class CSpotPlayer : public bell::Task {
+   CSpotPlayer(std::shared_ptr<cspot::SpircHandler> handler)
+       : bell::Task("cspot", 8 * 1024, 0, 0) {
+     this->handler = handler;
++    // Select the sink from Kconfig instead of hardcoding ES8311.
++#ifdef CONFIG_CSPOT_SINK_INTERNAL
++    this->audioSink = std::make_unique<InternalAudioSink>();
++#elif defined(CONFIG_CSPOT_SINK_AC101)
++    this->audioSink = std::make_unique<AC101AudioSink>();
++#elif defined(CONFIG_CSPOT_SINK_ES8388)
++    this->audioSink = std::make_unique<ES8388AudioSink>();
++#elif defined(CONFIG_CSPOT_SINK_ES9018)
++    this->audioSink = std::make_unique<ES9018AudioSink>();
++#elif defined(CONFIG_CSPOT_SINK_PCM5102)
++    this->audioSink = std::make_unique<PCM5102AudioSink>();
++#elif defined(CONFIG_CSPOT_SINK_TAS5711)
++    this->audioSink = std::make_unique<TAS5711AudioSink>();
++#elif defined(CONFIG_CSPOT_SINK_MAX98357A)
++    this->audioSink = std::make_unique<MAX98357AAudioSink>();
++#else
+     this->audioSink = std::make_unique<ES8311AudioSink>();
++#endif
+     this->audioSink->setParams(44100, 2, 16);
+     this->audioSink->volumeChanged(160);
+ 
+@@ -86,7 +109,11 @@ class CSpotPlayer : public bell::Task {
+         std::make_unique<bell::CircularBuffer>(1024 * 128 * 8);
+ 
+     this->handler->getTrackPlayer()->setDataCallback(
+-        [this](uint8_t* data, size_t bytes) { this->feedData(data, bytes); });
++        [this](uint8_t* data, size_t bytes,
++               std::string_view format) -> size_t {
++          this->feedData(data, bytes);
++          return bytes;
++        });
+     this->isPaused = false;
+ 
+     this->handler->setEventHandler(
+@@ -151,7 +178,7 @@ class CSpotTask : public bell::Task {
+     mdns_hostname_set("cspot");
+     std::atomic<bool> gotBlob = false;
+ 
+-    auto blob = std::make_shared<LoginBlob>(DEVICE_NAME);
++    auto blob = std::make_shared<cspot::LoginBlob>(DEVICE_NAME);
+ 
+     auto server = std::make_unique<bell::BellHTTPServer>(8080);
+     server->registerGet(
