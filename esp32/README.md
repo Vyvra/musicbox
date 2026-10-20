@@ -22,7 +22,7 @@ on a board yet, because there isn't one.
 | Buttons / volume knob | media keys → socket | GPIO buttons + quadrature encoder | ✅ same commands |
 | Per-source volume defaults | −24 / −15 dB | −24 / −15 dB | ✅ |
 | Volume step | 3 dB | 3 dB | ✅ |
-| "pull it out → remember position" | udev | card-detect switch | ✅ needs the CD pin (see below) |
+| "pull it out → remember position" | udev | USB enumeration (no switch needed) | ⬜ pending the USB layer |
 
 The command surface is deliberately byte-compatible with the Pi's, so `status` answers
 `local: track 3, 42s` or `idle: no stick` and the same muscle memory works:
@@ -31,19 +31,71 @@ The command surface is deliberately byte-compatible with the Pi's, so `status` a
 next | prev | playpause | play | pause | stop | status | volume -12 | volume-up | volume-down
 ```
 
+## The board: ESP32-S3 N16R8 dev board
+
+Dual USB-C, but **not** two host ports — the vendor's own description settles it: one
+port is a **CH343 USB-to-serial** bridge, the other is the **native USB-OTG** directly on
+the S3. There is only one USB controller.
+
+That is still exactly the right layout:
+
+| port | job |
+| --- | --- |
+| native USB-C | **host** — the stick, via a C-to-A adapter |
+| CH343 "COM" port | power, flashing, serial logs |
+
+⚠️ **The consequence: USB-CDC-on-boot must stay OFF.** If the core claims the native port
+as a serial device, it cannot also be a host. `platformio.ini` therefore does *not* set
+`ARDUINO_USB_CDC_ON_BOOT`, and all `Serial` output goes over the CH343 port. (The shop
+advises enabling CDC — correct if you program over the native port, wrong for this box.)
+
+N16R8 = 16 MB flash + 8 MB **octal** PSRAM, which needs `board_build.arduino.memory_type
+= qio_opi`. Get that wrong and the board boots with the PSRAM invisible, or boot-loops —
+and the decoder wants that headroom.
+
+## USB sticks: what the research changed
+
+The earlier note said USB sticks were off the table. **That was wrong**, and the reason is
+worth recording: `libarduino_tinyusb.a` in the Arduino core already ships the complete
+TinyUSB **host** stack — 129 `tuh_` symbols including `tuh_msc_read10`,
+`tuh_msc_read_capacity` and `tuh_msc_mounted` — plus a *weak* `tuh_msc_mount_cb` to
+override. `src/usb_host_probe.cpp` calls them, so "available" here means *links in a
+sketch*, not *exists in an archive*.
+
+What is missing is the layer above blocks: TinyUSB hands over 512-byte sectors and knows
+nothing about files. So:
+
+| piece | state |
+| --- | --- |
+| TinyUSB host + MSC | ✅ in the core, verified to link |
+| **FAT reader** (`src/fat_reader.cpp`) | ✅ written **and tested** — see below |
+| `fs::FS` adapter so audioI2S can open a path | ⬜ next |
+| MSC bring-up + `tuh_task` poll + hot-plug | ⬜ next |
+
+⚠️ **FAT only — not exFAT.** A stick formatted exFAT will not mount. Two of the three
+existing sticks (**MUSIC**, **VERHALEN**) are exFAT and must be reformatted as FAT32
+(the PLAYLIST stick is already vfat). FAT32 also caps a file at 4 GB, which is irrelevant
+for audio.
+
+### Testing the FAT layer without hardware
+
+`test/host/run.sh` builds FAT16 and FAT32 images, validates them with **`fsck.vfat`** (a
+separate implementation), then compiles `fat_reader.cpp` *for the host* and reads them.
+30 checks: listing, long filenames with spaces and accents, nested directories, whole-file
+reads, offset reads across cluster boundaries, and clamping at end-of-file. Both images
+pass, and both are `fsck`-clean (rc=0), so the reader is tested against spec-correct
+volumes rather than against its own assumptions.
+
+Writing that test found four real bugs, all in *my* code rather than the reader's
+design: the FAT12/16 root was being walked as a cluster chain, assembled long names
+retained NUL padding, the FAT32 root silently lost entries past the first 512 bytes, and
+— on the image-builder side — long-name checksums, `.`/`..` entries, the FAT32 FSINFO
+field offsets (0x30/0x32, not 0x28/0x2A) and the extended-BPB signature were all wrong.
+`fsck` caught every one of those; the reader's own tests alone did not.
+
 ## What does **not** carry over — and why
 
-### 1. The USB stick (the big one)
-
-An ESP32-S3 *can* host USB (`usb_host_msc` in ESP-IDF), but the Arduino core has no
-mass-storage driver, and the XIAO's USB-C is wired as its 5 V **input** — as a host it
-would also have to supply 5 V to the stick. So this port uses a **microSD card** instead:
-same "swap the medium" behaviour, none of the USB work.
-
-That is a real change to the interaction, not a detail: a card is fiddlier for a child to
-handle than a USB stick, and it needs a card-detect switch to notice removal at all.
-
-### 2. Spotify
+### Spotify
 
 Implemented as a **seam, not a stub that pretends**: `SpotifyPlayer` exists, reports
 `Spotify is not implemented on this build`, and `status` says so. The reason is in the
@@ -54,7 +106,7 @@ load) and of not building at all — **with no maintainer reply**. Wiring that i
 produce a backend that compiles and stays silent. The class is where a working client
 would go if one appears.
 
-### 3. Hardware volume
+### Hardware volume
 
 The Pi drives the PCM5122's mixer in dB. The MAX98357A has no mixer, so volume here is a
 **software multiply** (`stepsForDb`, amplitude-mapped through `10^(dB/20)`). It works, but
@@ -90,9 +142,17 @@ that avoids the S3's strapping pins and the native USB pair. Match it to your bo
 ## Honest verdict
 
 Everything that is *logic* survives: parsing, ordering, resume, volume rules, the command
-vocabulary, the button/knob behaviour. Everything that is *platform* does not: file
-storage, the Spotify client, and hardware volume.
+vocabulary, the button/knob behaviour. Two of the three platform gaps turned out to be
+solvable:
 
-That split is the answer to the original question. The ESP32 gives you a €15 box that
-does the local-file half well, and it cannot give you the Spotify half at all — not
-because the code is hard, but because the only client is abandoned.
+* **USB sticks are back on the table.** The TinyUSB host stack already ships in the core,
+  and the filesystem layer above it is written and tested. What remains is wiring,
+  not research: bring MSC up, poll `tuh_task`, and adapt the FAT reader to Arduino's
+  `fs::FS` so the audio decoder can open a path.
+* **Hardware volume** stays a software multiply, which costs resolution at low levels.
+
+What genuinely does not survive is **Spotify** — not because the code is hard, but because
+the only ESP32 client is abandoned. That is the one thing money cannot fix.
+
+So the ESP32 is a ~€10 box that can plausibly do everything the Pi does *except* Spotify,
+with the stick behaviour intact via the native USB port.
