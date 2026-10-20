@@ -56,6 +56,7 @@ DEFAULTS = {
     "SPOTIFY_BITRATE": "320",
     "LIBRESPOT_BIN": "librespot",
     "LIBRESPOT_CACHE": "/var/lib/musicbox/librespot",
+    "SPOTIFY_LAST_FILE": "/var/lib/musicbox/spotify-last.json",
     # On-demand by default. Set to 1 to keep librespot resident: Spotify starts in
     # ~0.3 s instead of ~1.6 s and the box is always a Connect speaker - but then a
     # phone can start playing to it while a local stick is running.
@@ -529,7 +530,27 @@ class Controller:
         # What WE last played on the Spotify device. Needed because /me/player
         # reports no context at all for audiobooks and podcasts (verified: context
         # is null and item is {}), so "is this the same thing?" has no API answer.
-        self.last_played_uri = None
+        # Persisted, otherwise a daemon restart makes an audiobook start over.
+        self.last_played_uri = self._load_spotify_last()
+
+    def _load_spotify_last(self):
+        try:
+            with open(self.cfg["SPOTIFY_LAST_FILE"], encoding="utf-8") as fh:
+                return json.load(fh).get("uri")
+        except (FileNotFoundError, ValueError, KeyError, OSError):
+            return None
+
+    def _remember_spotify(self, uri):
+        self.last_played_uri = uri
+        path = self.cfg["SPOTIFY_LAST_FILE"]
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"uri": uri}, fh)
+            os.replace(tmp, path)
+        except OSError as exc:
+            LOG.warning("could not persist %s: %s", path, exc)
 
     # -- public
 
@@ -706,9 +727,15 @@ class Controller:
                 LOG.info("resuming the paused Spotify item on %r",
                          self.cfg["SPOTIFY_DEVICE_NAME"])
                 self.spotify.resume(stick.device_id)
+                if not self.spotify.wait_playing(stick.device_id):
+                    # Nothing to resume. Typical after a daemon restart: librespot is
+                    # restarted too, so the device session and its paused position are
+                    # gone. Start the context rather than leave the child in silence.
+                    LOG.warning("resume started nothing; starting the context instead")
+                    self.spotify.play_context(stick.device_id, uri)
             else:
                 self.spotify.play_context(stick.device_id, uri)
-            self.last_played_uri = uri
+            self._remember_spotify(uri)
             LOG.info("Spotify playback requested on %r (%s)",
                      self.cfg["SPOTIFY_DEVICE_NAME"], uri)
         except (mbx_spotify.SpotifyError, OSError, TimeoutError) as exc:

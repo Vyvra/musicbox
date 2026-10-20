@@ -218,6 +218,26 @@ class Api:
     def current(self):
         return self._call("GET", "/me/player")
 
+    def wait_playing(self, device_id=None, timeout=6.0):
+        """True once Spotify reports playback actually running.
+
+        Needed after a bare resume: if librespot was restarted, the device session
+        (and with it the paused position) is gone, and the resume silently does
+        nothing.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                cur = self.current() or {}
+            except SpotifyError:
+                return False
+            if cur.get("is_playing"):
+                dev = (cur.get("device") or {}).get("id")
+                if device_id is None or dev == device_id:
+                    return True
+            time.sleep(0.5)
+        return False
+
 
 class Librespot:
     """Our own librespot process, so we decide when it owns the sound card."""
