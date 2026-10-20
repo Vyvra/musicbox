@@ -1,0 +1,37 @@
+--- ~/build/cspot/cspot/CMakeLists.txt	2026-10-20 21:28:37.163615207 +0200
++++ cspot/CMakeLists.txt	2026-10-20 23:02:30.622805193 +0200
+@@ -25,15 +25,29 @@
+ endif()
+ 
+ # Build protobuf code
+-set(NANOPB_OPTIONS "-I${CMAKE_CURRENT_SOURCE_DIR}")
+-file(GLOB PROTOS protobuf/*.proto)
+-nanopb_generate_cpp(PROTO_SRCS PROTO_HDRS RELPATH ${CMAKE_CURRENT_SOURCE_DIR} ${PROTOS})
++# MIXED-BUILD PATCH (probe project only): the vendored nanopb 0.4.6 generator needs
++# protobuf-3.x Python plus a matching protoc, which a PlatformIO build does not provide.
++# The two .pb.c/.pb.h pairs are pre-generated (protoc 23.4 + protobuf 3.20.3) and used
++# directly, so nothing is generated at build time.
++set(PROTO_SRCS
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/authentication.pb.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/keyexchange.pb.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/login5.pb.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mercury.pb.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/metadata.pb.c
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/spirc.pb.c)
++set(PROTO_HDRS
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/authentication.pb.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/keyexchange.pb.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/login5.pb.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mercury.pb.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/metadata.pb.h
++    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/spirc.pb.h)
+ add_custom_target(generate_proto_sources DEPENDS ${PROTO_SRCS} ${PROTO_HDRS})
+-set_source_files_properties(${PROTO_SRCS} ${PROTO_HDRS} PROPERTIES GENERATED TRUE)
+ 
+ add_library(cspot STATIC ${SOURCES} ${PROTO_SRCS})
+ # PUBLIC to propagate includes from bell to cspot dependents
+ target_compile_definitions(bell PUBLIC PB_ENABLE_MALLOC)
+ target_compile_definitions(bell PUBLIC PB_FIELD_32BIT)
+ target_link_libraries(cspot PUBLIC ${EXTRA_LIBS})
+-target_include_directories(cspot PUBLIC "include" ${CMAKE_CURRENT_BINARY_DIR} ${NANOPB_INCLUDE_DIRS} ${EXTRA_INCLUDES})
++target_include_directories(cspot PUBLIC "include" ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${NANOPB_INCLUDE_DIRS} ${EXTRA_INCLUDES})

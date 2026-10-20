@@ -1,0 +1,48 @@
+cmake_minimum_required(VERSION 3.16)
+
+# Our firmware sources (copied verbatim from kids-music-player/esp32/src) plus the cspot
+# seam (integration/spotify_cspot.cpp, copied in as src/spotify_cspot.cpp).
+file(GLOB APP_SOURCES "*.cpp" "*.c")
+
+idf_component_register(
+    SRCS ${APP_SOURCES}
+    INCLUDE_DIRS "."
+    REQUIRES framework-arduinoespressif32 arduino_tinyusb
+)
+
+# bell's vendored Opus trips GCC 14's -Wsizeof-array-div, which IDF promotes to an error
+# (-Werror=all). Relax the new-GCC diagnostics for the third-party targets below; this is a
+# compiler-age mismatch, not an IDF 5.1 -> 5.5 API change.
+add_compile_options(
+    -Wno-error=sizeof-array-div
+    -Wno-error=array-bounds
+    -Wno-error=stringop-overflow
+    -Wno-error=maybe-uninitialized
+    -Wno-error=overloaded-virtual
+    -Wno-error=stringop-truncation
+    -Wno-error=class-memaccess
+    -Wno-error=format-overflow
+)
+
+# cspot: plain CMake static libraries (cspot + bell), built inside this component's binary
+# dir. bell's own CMakeLists add_subdirectory()s its vendored deps (opus, nanopb, cJSON,
+# nlohmann_json, ...), so nothing has to be re-registered as an IDF component.
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../cspot ${CMAKE_CURRENT_BINARY_DIR}/cspot)
+
+# cspot is C++20 and needs exceptions (CONFIG_COMPILER_CXX_EXCEPTIONS=y in sdkconfig.defaults);
+# its PUBLIC include dirs come with the target, which is why this is PUBLIC.
+target_link_libraries(${COMPONENT_LIB} PUBLIC cspot)
+
+# The Arduino core exports ~40 library directories as PUBLIC includes, several of which
+# collide with bell's generic header names - Arduino's HTTPClient.h shadows bell's
+# bell::HTTPClient (CDNAudioFile.h) and breaks the cspot headers. Prepend cspot's own
+# include dirs so the quoted includes resolve inside cspot first.
+get_target_property(_cspot_incs cspot INTERFACE_INCLUDE_DIRECTORIES)
+get_target_property(_bell_incs bell INTERFACE_INCLUDE_DIRECTORIES)
+target_include_directories(${COMPONENT_LIB} BEFORE PRIVATE ${_cspot_incs} ${_bell_incs})
+# Probe-only: force the linker to pull cspot's core out of libcspot.a. Without this the
+# Arduino-side main() never constructs a SpircHandler, so -ffunction-sections/--gc-sections
+# drops every cspot object and the image would not prove the second half really links.
+target_link_libraries(${COMPONENT_LIB} INTERFACE
+    "-u _ZN5cspot12SpircHandlerC1ESt10shared_ptrINS_7ContextEE"
+    "-u _ZN5cspot12SpircHandler10disconnectEv")

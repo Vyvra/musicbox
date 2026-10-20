@@ -166,8 +166,17 @@ resolved from cspot's source rather than guessed:
 - **elapsed position**: it lives in a private protobuf frame, so cspot gained a two-line
   `positionMs()` accessor (recorded in the captured port).
 
-What remains is wiring, not code: our controller has to become cspot's `main` for the
-adapter to be linked (today the image size is unchanged because nothing calls `cspotAttach`).
+**And the two halves link into one image.** A PlatformIO `framework = arduino, espidf` project
+(Arduino 3.3.12 + ESP-IDF 5.5.5) compiles our sources *verbatim* alongside cspot: 2.15 MB
+firmware, 31.6 % of the app partition, 462 `cspot::` symbols in the ELF. Every blocker was
+plumbing — a component name, a `tusb.h` wrapper, pre-generated protobuf files, an
+`HTTPClient` name clash — with no exceptions/RTTI or duplicate-mbedTLS problem. Details and
+the reproduction recipe: **[firmware-mixed/](firmware-mixed/)**.
+
+That capture also exposed what is genuinely left, which is more than code: cspot's boot needs
+**WiFi** (the Pi got it from Linux) and a **zeroconf pairing flow** before any session exists.
+The sink and `SpircHandler` are compiled but not yet constructed, so cspot is currently
+force-linked into the image rather than driven.
 
 History, and why the seam once existed:
 **cspot itself was verified working on 2026-10-20**, so this is now a porting task rather
