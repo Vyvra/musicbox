@@ -136,7 +136,12 @@ class Api:
             try:
                 with urllib.request.urlopen(req, timeout=20) as resp:
                     raw = resp.read()
-                    return json.loads(raw) if raw else {}
+                if not raw or not raw.strip():
+                    return {}          # 204 No Content: pause/play do this
+                try:
+                    return json.loads(raw)
+                except ValueError:
+                    return {}          # never let a non-JSON body kill the caller
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")[:300]
                 if exc.code == 401 and attempt == 1:

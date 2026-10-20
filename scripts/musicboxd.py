@@ -51,6 +51,10 @@ DEFAULTS = {
     "SPOTIFY_BITRATE": "320",
     "LIBRESPOT_BIN": "librespot",
     "LIBRESPOT_CACHE": "/var/lib/musicbox/librespot",
+    # On-demand by default. Set to 1 to keep librespot resident: Spotify starts in
+    # ~0.3 s instead of ~1.6 s and the box is always a Connect speaker - but then a
+    # phone can start playing to it while a local stick is running.
+    "LIBRESPOT_ALWAYS_ON": "0",
     "MPV_EXTRA_ARGS": "",      # space-separated, e.g. --ao=null for testing without speakers
     "STATE_FILE": "/var/lib/musicbox/state.json",
     "RECONCILE_INTERVAL": "5",   # s, backstop poll in case a udev event is missed
@@ -545,11 +549,34 @@ class Controller:
         except (TimeoutError, ConnectionError, OSError) as exc:
             LOG.warning("could not pre-start mpv (%s); will start on demand", exc)
 
+        if mbx_spotify and self.cfg["LIBRESPOT_ALWAYS_ON"] == "1":
+            self._ensure_librespot()
+            try:
+                self.librespot.start()
+                LOG.info("librespot kept resident (LIBRESPOT_ALWAYS_ON=1); "
+                         "the box is a Spotify Connect speaker too")
+            except OSError as exc:
+                LOG.warning("could not pre-start librespot: %s", exc)
+
+    def _ensure_librespot(self):
+        if self.spotify is None:
+            self.spotify = mbx_spotify.Api(
+                mbx_spotify.Credentials(self.cfg["SPOTIFY_CREDENTIALS"]))
+        if self.librespot is None:
+            self.librespot = mbx_spotify.Librespot(
+                binary=self.cfg["LIBRESPOT_BIN"],
+                name=self.cfg["SPOTIFY_DEVICE_NAME"],
+                device=self.cfg["SPOTIFY_ALSA_DEVICE"],
+                cache_dir=self.cfg["LIBRESPOT_CACHE"],
+                bitrate=self.cfg["SPOTIFY_BITRATE"])
+
     def on_shutdown(self, *_):
         if self.stick:
             self.stop_stick("shutting down", keep_warm=False)
         elif self.player:
             self.player.quit()
+        if self.librespot:
+            self.librespot.stop()
 
     # -- start / stop
 
@@ -639,16 +666,9 @@ class Controller:
             self.player.stop()
 
         try:
-            if self.spotify is None:
-                self.spotify = mbx_spotify.Api(
-                    mbx_spotify.Credentials(self.cfg["SPOTIFY_CREDENTIALS"]))
-                self.librespot = mbx_spotify.Librespot(
-                    binary=self.cfg["LIBRESPOT_BIN"],
-                    name=self.cfg["SPOTIFY_DEVICE_NAME"],
-                    device=self.cfg["SPOTIFY_ALSA_DEVICE"],
-                    cache_dir=self.cfg["LIBRESPOT_CACHE"],
-                    bitrate=self.cfg["SPOTIFY_BITRATE"])
-            self.librespot.start()
+            self._ensure_librespot()
+            if not self.librespot.alive():
+                self.librespot.start()
             stick.device_id = self.spotify.find_device(self.cfg["SPOTIFY_DEVICE_NAME"])
             self.spotify.play_context(stick.device_id, uri)
             LOG.info("Spotify playback requested on %r (%s)",
@@ -687,10 +707,13 @@ class Controller:
 
         if stick.kind == "spotify":
             LOG.info("stopping Spotify (%s)", reason)
-            if self.spotify and stick.device_id:
-                self.spotify.pause(stick.device_id)   # Spotify keeps the position
-            if self.librespot:
-                self.librespot.stop()                 # release the sound card
+            try:
+                if self.spotify and stick.device_id:
+                    self.spotify.pause(stick.device_id)   # Spotify keeps the position
+            except Exception as exc:                      # never block the unplug path
+                LOG.warning("pause failed: %s", exc)
+            if self.librespot and self.cfg["LIBRESPOT_ALWAYS_ON"] != "1":
+                self.librespot.stop()                     # release the sound card
             umount(stick.mnt)
             self.stick = None
             return
@@ -734,6 +757,18 @@ class Controller:
 
     def monitor(self):
         stick = self.stick
+        if stick is None:
+            return
+
+        if stick.kind == "spotify":
+            # librespot owns playback here; mpv is deliberately idle, so none of the
+            # local-playlist bookkeeping below applies (it would call the stick
+            # "finished" immediately).
+            if self.librespot and not self.librespot.alive():
+                LOG.warning("librespot exited unexpectedly")
+                self.stop_stick("librespot died")
+            return
+
         if self.player is None:
             return
 
@@ -810,7 +845,10 @@ def main():
     controller = Controller(cfg)
 
     def terminate(*_):
-        controller.on_shutdown()
+        try:
+            controller.on_shutdown()
+        except Exception:              # a broken cleanup must not fail the unit
+            LOG.exception("cleanup failed during shutdown")
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, terminate)

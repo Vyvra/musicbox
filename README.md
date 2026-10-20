@@ -132,7 +132,75 @@ bash check.sh
 Expect: a card named `sndrpihifiberry`, no `bcm2835` card, and a `Digital` mixer control.
 Then plug in a stick and watch `journalctl -u musicboxd -f`.
 
-## How it works
+## Spotify sticks (a stick can point instead of carry)
+
+A stick may carry a **`musicbox.txt`** instead of audio. It holds simple
+`key="value"` commands; unknown keys are ignored so the file can grow later without
+breaking older boxes. Currently one command exists:
+
+```
+# Kids music box - command file
+play_spotify_playlist="https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+```
+
+Plug it in and that playlist plays; pull it out and playback pauses (Spotify keeps the
+position, so re-inserting the same stick resumes it). A `musicbox.txt` **outranks** what
+else is on the stick — it is the deliberate override.
+
+### Why it needs two logins (and why that is not optional)
+
+| | what it is for | lifetime |
+| --- | --- | --- |
+| `librespot` login | makes the box appear as a Spotify device at all | cached in `/var/lib/musicbox/librespot/credentials.json`, refresh handled internally |
+| Web API refresh token | lets the box say *"play this playlist"* | **6 months**, and refreshing does not extend it |
+
+A librespot that is only advertising via zeroconf **never appears in
+`GET /me/player/devices`**, so nothing can address it — it must be logged in. And the
+device **id** is resolved by name on every plug, because Spotify says ids are only
+"persistent to some extent".
+
+Setup is one-time: `sudo python3 /usr/local/bin/spotify-setup.py` (browser OAuth, saves
+`/etc/musicbox/spotify.json` mode 600), then librespot's own login once. When the
+token does expire the daemon logs
+`Spotify refresh token is no longer valid (they expire after 6 months)` and local
+sticks keep working.
+
+### Settings
+
+```
+SPOTIFY_DEVICE_NAME=Musicbox
+SPOTIFY_ALSA_DEVICE=hw:CARD=sndrpihifiberry,DEV=0
+SPOTIFY_BITRATE=320
+LIBRESPOT_ALWAYS_ON=0        # see below
+```
+
+**`LIBRESPOT_ALWAYS_ON`** — measured on the box: an *idle, logged-in* librespot does
+**not** hold the ALSA device (verified: another player can open `hw:` while it idles).
+So it can stay resident, which makes Spotify start in ~0.3 s instead of ~1.6 s and
+keeps the box permanently available as a Connect speaker. Left at `0` by default
+because the converse risk is real: a phone could then start playing to the box while a
+local stick is running. Set it to `1` if you prefer the always-on behaviour.
+
+### Timings
+
+| | time |
+| --- | --- |
+| local stick → audio | 0.37 s |
+| Spotify stick → audio (librespot started on demand) | **1.55–1.70 s** |
+| Spotify stick → audio (`LIBRESPOT_ALWAYS_ON=1`) | ~0.3 s expected |
+
+The extra ~1.2 s is librespot starting and registering with Spotify's dealer, not
+anything in the daemon.
+
+### Debugging Spotify
+
+| Symptom | Meaning |
+| --- | --- |
+| `Spotify device 'Musicbox' did not appear within 30s (visible devices: …)` | librespot is not logged in, or Spotify's device registry has lost it (a known upstream flakiness, librespot issues #1672/#1700/#1726). The error lists what Spotify *can* see. |
+| `refresh token is no longer valid` | the 6-month expiry — re-run `spotify-setup.py` |
+| `this account needs Premium` | obvious, but worth saying: Spotify refuses playback on Free |
+| silence, no errors | check `journalctl -u musicboxd` for `AlsaSink`; mpv and librespot cannot both own `hw:` |
+
 
 ```
 udevadm monitor ──┐
@@ -194,6 +262,8 @@ Choices worth knowing:
 | `scripts/inspect-image.py` | read files out of the `.img` without root (used to verify the overlay exists before flashing) |
 | `scripts/flash-sd.sh` | guarded image write with a read-back check |
 | `scripts/preseed-card.sh` | headless first boot: user, SSH, hostname, optional WiFi |
+| `scripts/mbx_spotify.py` | Spotify: token refresh, device lookup by name, librespot lifecycle |
+| `scripts/spotify-setup.py` | one-time browser OAuth for the Web API token |
 | `scripts/set-wifi-password.sh` | interactive passphrase entry (`read -rs`, never in argv) |
 | `scripts/harden.sh` | SD-wear: journald volatile, `commit=600`, optional overlay root |
 | `credentials.txt` | Pi user/password (git-ignored, mode 600) |
