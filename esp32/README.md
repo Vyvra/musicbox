@@ -95,7 +95,7 @@ for audio.
 
 `test/host/run.sh` builds FAT16 and FAT32 images, validates them with **`fsck.vfat`** (a
 separate implementation), then compiles the firmware's own sources *for the host* and runs
-them: **78 checks**, all passing on both filesystems.
+them: **144 checks**, all passing.
 
 - `test_fat.cpp` (15/image) — listing, long filenames with spaces and accents, nested
 directories, whole-file reads, offset reads across cluster boundaries, end-of-file clamping.
@@ -103,6 +103,13 @@ directories, whole-file reads, offset reads across cluster boundaries, end-of-fi
 `size()`, `seek` in all three modes, position tracking, directory iteration, nested paths,
 missing files, and the read-only refusals. Arduino's FS types are stubbed in `stubs/FS.h`
 from the same contract the core exposes.
+- `test_logic.cpp` (66) — the pure behaviour, which is where drift from the Pi would be
+silent: `parseVolumeDb`/`parseShuffle` across every spelling an adult might type, natural
+ordering, `musicbox.txt` read from real images (including a stick that sets
+`default_volume` and one that is audio-only), the resume store, and the whole control
+vocabulary with its exact reply strings (`local: track 0, 0s`, `volume -12 dB`, clamping at
+-80/0, 3 dB steps, `unknown command 'x'`). Playback backends are faked, so the controller
+runs without the audio library or a board.
 
 The adapter test immediately earned its place: it caught `seek(Cur)` being wrong, because
 the API takes `uint32_t` and a backwards seek arrives as a large unsigned value — the

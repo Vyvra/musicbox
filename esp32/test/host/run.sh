@@ -12,20 +12,27 @@ cd "$(dirname "$0")"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-for spec in "fat16 16" "fat32 64"; do
+# fat16/fat32 carry the standard musicbox.txt (Spotify instruction + shuffle=on);
+# the two variants exercise per-stick volume and an audio-only stick.
+for spec in "fat16 16 " "fat32 64 " "fat16 16 local" "fat16 16 defaultvol"; do
   set -- $spec
-  kind=$1; size=$2
-  echo "== building $kind image (${size} MB)"
-  python3 makeimage.py "$TMP/$kind.img" "$kind" "$size"
+  kind=$1; size=$2; variant=${3:-}
+  name="$kind${variant:+_$variant}"
+  echo "== building $name image (${size} MB)"
+  python3 makeimage.py "$TMP/$name.img" "$kind" "$size" "$variant"
 
   echo "== validating with fsck.vfat (independent)"
-  fsck.vfat -n "$TMP/$kind.img" | tail -1
+  fsck.vfat -n "$TMP/$name.img" | tail -1
 done
 
 echo "== compiling for the host (same sources the firmware uses)"
 g++ -std=c++17 -O2 -Wall -Wextra -o "$TMP/test_fat" test_fat.cpp ../../src/fat_reader.cpp
 g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
     -o "$TMP/test_fs_adapter" test_fs_adapter.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
+    -o "$TMP/test_logic" test_logic.cpp fake_players.cpp ../../src/controller.cpp \
+    ../../src/musicbox_txt.cpp ../../src/storage.cpp ../../src/resume.cpp \
+    ../../src/usb_fs.cpp ../../src/fat_reader.cpp
 
 status=0
 for kind in fat16 fat32; do
@@ -37,5 +44,9 @@ for kind in fat16 fat32; do
 done
 
 echo
-[ "$status" -eq 0 ] && echo "ALL IMAGES PASS" || echo "FAILURES"
+echo "== logic: musicbox.txt, ordering, resume, control vocabulary"
+"$TMP/test_logic" "$TMP/fat16_local.img" "$TMP/fat16.img" "$TMP/fat16_defaultvol.img" || status=1
+
+echo
+[ "$status" -eq 0 ] && echo "ALL TESTS PASS" || echo "FAILURES"
 exit "$status"

@@ -54,7 +54,14 @@ def needs_lfn(name):
             or any(c in name for c in " -()+[],;="))
 
 
-def build(out_path, kind, size_mb):
+def build(out_path, kind, size_mb, variant=""):
+    files = list(FILES)
+    if variant == "local":
+        files = [(n, (b'shuffle="on"\n' if n == "musicbox.txt" else c), f)
+                 for (n, c, f) in FILES]
+    elif variant == "defaultvol":
+        files = [(n, (b'default_volume="-9"\nshuffle="off"\n' if n == "musicbox.txt" else c), f)
+                 for (n, c, f) in FILES]
     total_sectors = (size_mb * 1024 * 1024) // SECTOR
     reserved = 32 if kind == "fat32" else 1
     fat_count = 2
@@ -203,7 +210,7 @@ def build(out_path, kind, size_mb):
     label11 = b"TESTVOL    "
     dirs[""] += short_entry(label11, 0x08, 0, 0)          # volume label entry
 
-    for rel_path, content, force_lfn in FILES:
+    for rel_path, content, force_lfn in files:
         parts = rel_path.split("/")
         d = "/".join(parts[:-1])
         dirs.setdefault(d, bytearray())
@@ -256,4 +263,5 @@ def build(out_path, kind, size_mb):
 
 
 if __name__ == "__main__":
-    build(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+    build(sys.argv[1], sys.argv[2], int(sys.argv[3]),
+          sys.argv[4] if len(sys.argv) > 4 else "")
