@@ -26,6 +26,12 @@
 #define SD_HAS_CARD_DETECT 1
 #define PIN_SD_CD   21
 
+// ---- status LED --------------------------------------------------------------
+// The N16R8 dev board carries an addressable WS2812 on GPIO48. Set to 0 on a board
+// without one, so nothing tries to drive the pin.
+#define STATUS_LED_ENABLED 1
+#define PIN_STATUS_LED     48
+
 // ---- buttons / knob (active low, internal pull-ups) --------------------------
 #define PIN_BTN_PLAYPAUSE 1
 #define PIN_BTN_NEXT      2

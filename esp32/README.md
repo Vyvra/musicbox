@@ -22,7 +22,7 @@ on a board yet, because there isn't one.
 | Buttons / volume knob | media keys → socket | GPIO buttons + quadrature encoder | ✅ same commands |
 | Per-source volume defaults | −24 / −15 dB | −24 / −15 dB | ✅ |
 | Volume step | 3 dB | 3 dB | ✅ |
-| "pull it out → remember position" | udev | USB enumeration (no switch needed) | ⬜ pending the USB layer |
+| "pull it out → remember position" | udev | USB enumeration (no switch needed) | ✅ wired: mount → play, unmount → checkpoint |
 
 The command surface is deliberately byte-compatible with the Pi's, so `status` answers
 `local: track 3, 42s` or `idle: no stick` and the same muscle memory works:
@@ -71,7 +71,13 @@ nothing about files. So:
 | **FAT reader** (`src/fat_reader.cpp`) | ✅ written **and tested** — see below |
 | `fs::FS` adapter (`src/usb_fs.cpp`) | ✅ **host-tested** (see below), read-only |
 | MSC bring-up + `tuh_task` poll + hot-plug (`src/usb_stick.cpp`) | ✅ compiles and links |
+| **Stick as the playback source** | ✅ `main.cpp`: mount starts the controller, unmount checkpoints and stops |
+| Status LED (on-board WS2812, GPIO48) | ✅ booting / idle / playing / attention |
 | Actually running on a board | ⬜ needs hardware |
+
+SD support from the earlier sketch was **removed**: this board has no card slot, and the
+stick is the interaction. That also shrank the image (24.2% → 23.1% of flash) and left one
+lifecycle to reason about instead of two.
 
 `usb_stick.cpp` wires the chain end to end: `tuh_msc_mount_cb` → block reader →
 `fat::Volume` → `fs::FS`. Plugging a stick *is* the insert event, so no card-detect switch
