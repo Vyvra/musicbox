@@ -174,6 +174,19 @@ service that maps each detent to `musicboxctl volume-up|volume-down` (or a direc
 - Even when it works, this is the riskiest part of the board: Vorbis decode on one
   ARMv6 core. `SPOTIFY_BITRATE=96` is not cosmetic, it is what makes it plausible.
 
+Installing it on the Zero W (`install.sh` does not install librespot — on the 3B+ it was
+added separately, and `/usr/bin/librespot` there is 0.8.0, 18.8 MB):
+
+```bash
+sudo install -m 0755 librespot-v0.8.0-armv6 /usr/local/bin/librespot
+librespot --version                       # expect 0.8.0, matching the 3B+
+ldd /usr/local/bin/librespot | grep -E 'not found|asound|libc.so'   # must be clean
+```
+
+`LIBRESPOT_BIN` defaults to `librespot` and is resolved through `PATH`,
+so `/usr/local/bin` wins without a config change. A binary built for the 3B+ is **not**
+reusable: that is ARMv7, and the Zero is ARMv6.
+
 ## 9. Verification order when the card exists
 
 1. Boot, WiFi up, `musicboxd` active — sticks play (this proves I2S + softvol).
