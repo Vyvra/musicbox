@@ -1,5 +1,6 @@
 #include "controller.h"
 #include "config.h"
+#include "spotify_backend.h"
 #include <algorithm>
 #include <random>
 
@@ -14,12 +15,26 @@ bool Controller::begin() {
   Serial.printf("[box] card %s: %u track(s)\n", media_.identity.c_str(),
                 (unsigned)media_.tracks.size());
 
+  // Per-source default, as on the Pi: audiobooks are mastered quieter than music, and the
+  // two paths share no reference. A per-stick default_volume still wins over this.
+  const bool audiobook = cmds.audiobook.length() > 0 && cmds.playlist.length() == 0;
+  const float sourceDefault = cmds.wantsSpotify()
+                                  ? (audiobook ? AUDIOBOOK_VOLUME_DB : SPOTIFY_VOLUME_DB)
+                                  : DEFAULT_VOLUME_DB;
+  volumeDb_ = cmds.hasVolume ? cmds.volumeDb : sourceDefault;
+
   // A Spotify instruction outranks the files, exactly like the Pi.
   if (cmds.wantsSpotify()) {
     String ref = cmds.playlist.length() ? cmds.playlist : cmds.audiobook;
     Serial.printf("[box] card asks for Spotify: %s\n", ref.c_str());
-    backend_ = new SpotifyPlayer(ref);
-    Serial.printf("[box] %s\n", backend_->problem().c_str());
+    auto* spotify = new SpotifyBackend(ref);
+    spotify->begin(volumeDb_);
+    backend_ = spotify;
+    if (spotify->problem().length()) {
+      Serial.printf("[box] %s\n", spotify->problem().c_str());
+    } else {
+      Serial.printf("[box] Spotify playing %s\n", spotify->uri().c_str());
+    }
     return true;      // "active" so status/why-it-is-silent is answerable
   }
 
@@ -45,9 +60,6 @@ bool Controller::begin() {
     Serial.printf("[box] shuffle is on: %u track(s) in random order\n",
                   (unsigned)media_.tracks.size());
   }
-
-  // Per-stick default_volume wins over the per-source default.
-  volumeDb_ = cmds.hasVolume ? cmds.volumeDb : DEFAULT_VOLUME_DB;
 
   auto* local = new LocalPlayer(fs_, media_.tracks);
   backend_ = local;
@@ -106,7 +118,13 @@ void Controller::applyVolume(float db) {
 
 String Controller::statusLine() {
   if (!backend_) return "idle: no stick";
-  if (backend_->kind()[0] == 's') return "spotify: " + backend_->problem();
+  if (backend_->kind()[0] == 's') {
+    // Same shape as the Pi's: "spotify: playing=True 42s". When there is no engine the
+    // reason is the answer, not a fake progress line.
+    if (backend_->problem().length()) return "spotify: " + backend_->problem();
+    return String("spotify: playing=") + (backend_->playing() ? "True" : "False") + " " +
+           String((unsigned)backend_->positionSeconds()) + "s";
+  }
   char buf[64];
   snprintf(buf, sizeof(buf), "local: track %d, %us", backend_->index(),
            (unsigned)backend_->positionSeconds());
@@ -144,12 +162,13 @@ String Controller::command(const String& raw) {
 
   if (cmd == "next" || cmd == "skip" || cmd == "next-track") {
     backend_->next();
-    if (backend_->kind()[0] == 's') return "error: " + backend_->problem();
+    // A backend with a problem explains itself; otherwise this is an ordinary success.
+    if (backend_->problem().length()) return "error: " + backend_->problem();
     return "next track";
   }
   if (cmd == "prev" || cmd == "previous" || cmd == "prev-track") {
     backend_->previous();
-    if (backend_->kind()[0] == 's') return "error: " + backend_->problem();
+    if (backend_->problem().length()) return "error: " + backend_->problem();
     return "previous track";
   }
   if (cmd == "play")   { backend_->resume(); return "playing"; }

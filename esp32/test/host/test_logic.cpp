@@ -17,6 +17,7 @@
 #include "../../src/storage.h"
 #include "../../src/usb_fs.h"
 #include "../host/fake_players.h"
+#include "mounted.h"
 
 using fs::File;
 
@@ -34,30 +35,6 @@ static void expectEq(const std::string& got, const std::string& want,
          ok ? "" : ("  [got '" + got + "' want '" + want + "']").c_str());
   if (!ok) failures++;
 }
-
-// Mounts an image file through the same adapter the board uses.
-struct Mounted {
-  std::vector<uint8_t> image;
-  mbx::UsbStorage storage;
-  bool ok = false;
-
-  explicit Mounted(const char* path) {
-    FILE* fh = fopen(path, "rb");
-    if (!fh) return;
-    fseek(fh, 0, SEEK_END);
-    long size = ftell(fh);
-    fseek(fh, 0, SEEK_SET);
-    image.resize((size_t)size);
-    if (fread(image.data(), 1, image.size(), fh) != image.size()) { fclose(fh); return; }
-    fclose(fh);
-    ok = storage.mount([this](uint32_t lba, uint8_t* buf, uint32_t count) -> bool {
-      size_t offset = (size_t)lba * 512, length = (size_t)count * 512;
-      if (offset + length > image.size()) return false;
-      memcpy(buf, image.data() + offset, length);
-      return true;
-    });
-  }
-};
 
 int main(int argc, char** argv) {
   if (argc < 4) {
@@ -193,8 +170,8 @@ int main(int argc, char** argv) {
     expect(box.begin(), "controller accepts a Spotify stick");
     String status = box.command("status");
     expect(status.c_str()[0] == 's', "status reports spotify, not local");
-    expect(std::string(status.c_str()).find("not implemented") != std::string::npos,
-           "Spotify status names the missing backend");
+    expect(std::string(status.c_str()).find("not linked") != std::string::npos,
+           "Spotify status names the missing engine");
   }
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASS", failures,

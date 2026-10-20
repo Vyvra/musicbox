@@ -31,8 +31,12 @@ g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
     -o "$TMP/test_fs_adapter" test_fs_adapter.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
 g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
     -o "$TMP/test_logic" test_logic.cpp fake_players.cpp ../../src/controller.cpp \
-    ../../src/musicbox_txt.cpp ../../src/storage.cpp ../../src/resume.cpp \
-    ../../src/usb_fs.cpp ../../src/fat_reader.cpp
+    ../../src/spotify_backend.cpp ../../src/spotify_uri.cpp ../../src/musicbox_txt.cpp \
+    ../../src/storage.cpp ../../src/resume.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
+    -o "$TMP/test_spotify" test_spotify.cpp fake_players.cpp ../../src/spotify_uri.cpp \
+    ../../src/spotify_backend.cpp ../../src/controller.cpp ../../src/musicbox_txt.cpp \
+    ../../src/storage.cpp ../../src/resume.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
 
 status=0
 for kind in fat16 fat32; do
@@ -46,6 +50,10 @@ done
 echo
 echo "== logic: musicbox.txt, ordering, resume, control vocabulary"
 "$TMP/test_logic" "$TMP/fat16_local.img" "$TMP/fat16.img" "$TMP/fat16_defaultvol.img" || status=1
+
+echo
+echo "== spotify: reference->URI, backend verbs, controller integration"
+"$TMP/test_spotify" "$TMP/fat16.img" || status=1
 
 echo
 [ "$status" -eq 0 ] && echo "ALL TESTS PASS" || echo "FAILURES"

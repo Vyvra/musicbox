@@ -59,33 +59,4 @@ class LocalPlayer : public MediaBackend {
   String problem_;
 };
 
-// Spotify is deliberately a seam, not an implementation.
-//
-// The only ESP32 Spotify Connect client is cspot, which has had no code commit since
-// 2024-07-12 and carries 2026 reports of "Cannot fetch CDN URL" (tracks failing to load)
-// with no maintainer reply. Wiring that in would produce a backend that compiles and
-// does not play, which is worse than an honest hole: the rest of the box can be
-// evaluated on its merits, and this class is where a working client would be dropped in.
-class SpotifyPlayer : public MediaBackend {
- public:
-  explicit SpotifyPlayer(const String& reference) : reference_(reference) {}
-  bool begin() { return false; }             // nothing to start today
-  const char* kind() const override { return "spotify"; }
-  bool     playing() override { return false; }
-  void     pause() override {}
-  void     resume() override {}
-  void     next() override {}
-  void     previous() override {}
-  void     stop() override {}
-  uint32_t positionSeconds() override { return 0; }
-  int      index() const override { return -1; }
-  bool     finished() override { return false; }
-  void     poll() override {}
-  void     setVolumeDb(float) override {}
-  String   problem() const override {
-    return "Spotify is not implemented on this build (" + reference_ + ")";
-  }
 
- private:
-  String reference_;
-};

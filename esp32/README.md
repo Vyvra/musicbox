@@ -129,7 +129,19 @@ field offsets (0x30/0x32, not 0x28/0x2A) and the extended-BPB signature were all
 
 ### Spotify
 
-`SpotifyPlayer` is still a seam rather than an implementation, but the reason has changed:
+The backend is **implemented and tested**: `src/spotify_backend.cpp` maps our verbs onto a
+session interface (`ISpotifySession`), and the controller drives it exactly as it drives the
+local player — same command strings, same volume rules, and a `status` line in the Pi's
+format (`spotify: playing=True 42s`). With an engine installed a stick plays; with none, the
+box says so instead of sitting silent (verified both ways).
+
+The engine itself is plugged in through a factory, because cspot is an ESP-IDF *application*
+rather than a library this Arduino build can call. The board-side adapter — five `cspot::`
+calls (`subscribeToMercury`, `loadTrackFromURI`, `setPause`, `nextSong`/`previousSong`,
+`setRemoteVolume`) — lives in `integration/spotify_cspot.cpp`, outside `src/` on purpose so
+PlatformIO never tries to compile it. It is the one part still unverified.
+
+History, and why the seam once existed:
 **cspot itself was verified working on 2026-10-20**, so this is now a porting task rather
 than a dead end.
 

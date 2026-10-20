@@ -69,6 +69,11 @@ class String {
       value_.erase((size_t)index, (size_t)count);
     }
   }
+  int indexOf(const char* needle) const {
+    size_t at = value_.find(needle ? needle : "");
+    return at == std::string::npos ? -1 : (int)at;
+  }
+  int indexOf(const String& needle) const { return indexOf(needle.value_.c_str()); }
   int indexOf(char needle) const {
     size_t at = value_.find(needle);
     return at == std::string::npos ? -1 : (int)at;

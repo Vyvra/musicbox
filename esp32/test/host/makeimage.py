@@ -23,7 +23,7 @@ FILES = [
     ("01 - First Song.mp3", b"FIRST" * 200, False),
     ("10 - Tenth Song.mp3", b"TENTH" * 300, False),   # natural-sort trap: 10 vs 2
     ("02 - Second Song.mp3", b"SECOND" * 100, False),
-    ("musicbox.txt", b'play_spotify_playlist="https://example/playlist"\nshuffle="on"\n', False),
+    ("musicbox.txt", b'play_spotify_playlist="https://open.spotify.com/playlist/5GStgmHQ6vYu2pyH1eo7EI"\nshuffle="on"\n', False),
     ("Sub Folder/deep track.mp3", b"DEEP" * 50, False),
     ("Een bestand met een lange naam.mp3", b"LONGNAME" * 80, True),
 ]
