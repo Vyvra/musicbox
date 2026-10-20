@@ -13,7 +13,7 @@ Prices are the Dutch shops' own figures where I could verify them, estimates oth
 | 1 | **ESP32-S3-WROOM-1 N16R8 dev board, dual USB-C** | 16 MB flash, 8 MB octal PSRAM (the decoder wants it), and the two-port layout the design needs: **CH343 port for power/flashing/logs**, **native USB as the stick's host**. On-board WS2812 on GPIO48 — the status LED you deferred, free. | **9.88** (benselectronics, verified in stock) |
 | 2 | **MAX98357A I2S amp breakout** | DAC + 3.2 W class-D in one module; 3 GPIOs in, speaker out. 3.2 W into 4 Ω at 5 V. | 2–4 (clone) / 7.20 (Adafruit, Antratek) |
 | 3 | **Speaker, 4 Ω 3 W** | Matches the amp's ceiling. 8 Ω halves it. | 3–5 |
-| 4 | **USB-C (m) → USB-A (f) OTG adapter** | The stick plugs into the native port. | 2–3 |
+| 4 | **USB-C male → USB-A female adapter** ("OTG" labelling not required) | The stick plugs into the native port. Must be **data-capable** — some cheap ones wire only VBUS for charging, and a stick on one is invisible. "OTG" adapters are the same shape and work; their CC pull-down is simply ignored, because the ESP32-S3 has no CC/PD logic at all. | 2–3 |
 | 5 | **KY-040 rotary encoder** | Volume knob, with its own push button. | 1–2 |
 | 6 | **Tactile buttons ×4 + caps** | play/pause, next, prev, stop. | 2 |
 | 7 | **5 V 2 A USB-C PSU + cable** | Powers the board through the CH343 port; the amp peaks around 0.7 A on top of the board's ~0.3 A. | 8 (or reuse) |
@@ -37,6 +37,10 @@ MAX98357A `SD_MODE` is left floating: it selects channel pairing and gain, and t
 reason to strap it before hearing the box.
 
 ## Two things that could add cost
+
+ℹ️ **The adapter, not the cable, is what matters.** Role selection on this chip is pure
+software (TinyUSB host mode) over plain D+/D−; there is no ID pin and no CC negotiation to
+satisfy, so an ordinary data-capable C-to-A-female adapter is enough.
 
 ⚠️ **USB VBUS back-feed (the real one).** For the board to *power* the stick, 5 V has to
 reach the native port's VBUS. Many dual-port dev boards put a Schottky diode between the two
