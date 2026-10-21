@@ -56,6 +56,7 @@ def needs_lfn(name):
 
 def build(out_path, kind, size_mb, variant=""):
     files = list(FILES)
+    fragmented = (variant == "fragmented")
     if variant == "local":
         files = [(n, (b'shuffle="on"\n' if n == "musicbox.txt" else c), f)
                  for (n, c, f) in FILES]
@@ -150,6 +151,35 @@ def build(out_path, kind, size_mb, variant=""):
         else:
             struct.pack_into("<H", fat, cluster * 2, value)
 
+    def fat_entry(cluster):
+        if kind == "fat32":
+            return struct.unpack_from("<I", fat, cluster * 4)[0] & 0x0FFFFFFF
+        return struct.unpack_from("<H", fat, cluster * 2)[0]
+
+    def alloc_fragmented(data):
+        """Allocate into the lowest free clusters, so the chain jumps whenever a hole
+        sits between used ones - which is what a used stick actually looks like."""
+        if not data:
+            return 0
+        need = (len(data) + cluster_bytes - 1) // cluster_bytes
+        chain = []
+        for c in range(3, next_cluster[0]):          # cluster 2 is the FAT32 root
+            if len(chain) >= need:
+                break
+            if fat_entry(c) == 0:
+                chain.append(c)
+        while len(chain) < need:
+            chain.append(next_cluster[0])
+            next_cluster[0] += 1
+        jumps = sum(1 for i in range(len(chain) - 1) if chain[i + 1] != chain[i] + 1)
+        print(f"  frag.mp3: {len(chain)} clusters, {jumps} non-contiguous jump(s)")
+        for i, c in enumerate(chain):
+            set_fat(c, EOC if i == len(chain) - 1 else chain[i + 1])
+            off = (first_data + (c - 2) * spc) * SECTOR
+            chunk = data[i * cluster_bytes:(i + 1) * cluster_bytes]
+            img[off:off + len(chunk)] = chunk
+        return chain[0]
+
     def alloc(data, first=None):
         """Write `data` into consecutive clusters, chained. Returns the first cluster."""
         if not data:
@@ -219,6 +249,32 @@ def build(out_path, kind, size_mb, variant=""):
         if force_lfn or needs_lfn(parts[-1]):
             dirs[d] += lfn_entries(parts[-1], name11)
         dirs[d] += short_entry(name11, 0x20, cluster, len(content))
+
+    if fragmented:
+        # Leave a hole in the middle of the volume, then write a file across it: its cluster
+        # chain must jump, which is what a stick that has been written to repeatedly looks
+        # like. Contiguous test images never exercise that path.
+        blocker_data = b"BLOCKER" * 2000        # fills clusters at the start
+        blocker_cluster = alloc(blocker_data)
+        dirs[""] += short_entry(name83("blocker.mp3"), 0x20, blocker_cluster,
+                                len(blocker_data))
+        spacer_first = alloc(b"SPACER" * 2000)  # this chain gets freed to make the hole
+        # A file *after* the spacer is what makes the hole interior: without it, filling the
+        # hole would simply continue contiguously and prove nothing.
+        tail_data = b"TAIL" * 2000
+        tail_cluster = alloc(tail_data)
+        dirs[""] += short_entry(name83("tail.mp3"), 0x20, tail_cluster, len(tail_data))
+        end_marker = 0x0FFFFFFF if kind == "fat32" else 0xFFFF
+        walker = spacer_first
+        while True:
+            nxt = fat_entry(walker)
+            set_fat(walker, 0)                 # free it
+            if nxt == end_marker or nxt == 0 or nxt >= next_cluster[0]:
+                break
+            walker = nxt
+        frag_data = b"FRAGMENTED!" * 3000      # deliberately bigger than the hole
+        frag_cluster = alloc_fragmented(frag_data)
+        dirs[""] += short_entry(name83("frag.mp3"), 0x20, frag_cluster, len(frag_data))
 
     for d in [k for k in dirs if k]:
         name = d.split("/")[-1]

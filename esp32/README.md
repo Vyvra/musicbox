@@ -99,9 +99,10 @@ for audio.
 
 ### Testing the FAT layer without hardware
 
-`test/host/run.sh` builds FAT16 and FAT32 images, validates them with **`fsck.vfat`** (a
-separate implementation), then compiles the firmware's own sources *for the host* and runs
-them: **210 checks**, all passing.
+`test/host/run.sh` builds five images (FAT16, FAT32, an audio-only stick, one with
+`default_volume`, and one **fragmented**), validates each with **`fsck.vfat`** (a separate
+implementation), then compiles the firmware's own sources *for the host* and runs them:
+**219 checks**, all passing.
 
 - `test_fat.cpp` (15/image) — listing, long filenames with spaces and accents, nested
 directories, whole-file reads, offset reads across cluster boundaries, end-of-file clamping.
@@ -109,6 +110,9 @@ directories, whole-file reads, offset reads across cluster boundaries, end-of-fi
 `size()`, `seek` in all three modes, position tracking, directory iteration, nested paths,
 missing files, and the read-only refusals. Arduino's FS types are stubbed in `stubs/FS.h`
 from the same contract the core exposes.
+- `test_fragmented.cpp` (9) — a file whose cluster chain **jumps** over an interior hole.
+  Every other image allocates contiguously, so the chain follower was never exercised across a
+  discontinuity, and a used stick is full of them.
 - `test_logic.cpp` — the pure behaviour, which is where drift from the Pi would be
 silent: `parseVolumeDb`/`parseShuffle` across every spelling an adult might type, natural
 ordering, `musicbox.txt` read from real images (including a stick that sets
