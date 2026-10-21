@@ -1,5 +1,9 @@
 # cspot → ESP32-S3: the captured port
 
+> **Licence:** the files here are patches for and add-ons to cspot, which is GPL-3.0. They are
+> therefore GPL-3.0 (text in `LICENSES/GPL-3.0.txt` at the repository root), not the MIT that
+> covers the rest of this project.
+
 What this directory is: the exact changes needed to make **cspot build for the ESP32-S3**,
 captured after doing it. It is the difference between "the client exists" and "the client
 runs on our chip".

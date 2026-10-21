@@ -530,3 +530,20 @@ header, running the 32-bit `-v7` image — all fine for this job.
 The lesson: measure the split before optimising. Shrinking the audio buffer or the udev
 settle would have bought ~0.6 s in total and risked crackle; keeping one mpv alive bought
 ~0.75 s and risks nothing.
+
+## Licensing
+
+This project is **MIT** — see [LICENSE](LICENSE) — with one exception that is better stated
+plainly than glossed over:
+
+- **`esp32/docs/cspot-esp32-port/` and `esp32/integration/`** contain patches for, add-ons to,
+  and glue against [cspot](https://github.com/feelfreelinux/cspot), the Spotify Connect client.
+  **cspot is GPL-3.0**, so those files are distributed under **GPL-3.0**
+  ([LICENSES/GPL-3.0.txt](LICENSES/GPL-3.0.txt)), not MIT.
+- The firmware also links **ESP32-audioI2S**, likewise **GPL-3.0**. Its source is not vendored
+  here (PlatformIO fetches it), but a *binary* built from this repository is a combined work and
+  is therefore subject to GPL-3.0 terms.
+
+Nothing here re-licences cspot: the patches are contributions under its own licence. The MIT
+grant covers the code written for the music box itself — the daemon, the ESP32 firmware, the
+tests and the documentation.
