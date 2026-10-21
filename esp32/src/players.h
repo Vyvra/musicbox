@@ -27,7 +27,7 @@ class MediaBackend {
 // MP3/AAC/FLAC/OGG decoding + I2S, via ESP32-audioI2S.
 class LocalPlayer : public MediaBackend {
  public:
-  LocalPlayer(fs::FS& fs, const std::vector<Track>& tracks)
+  LocalPlayer(fs::FS& fs, const std::vector<MediaTrack>& tracks)
       : fs_(fs), tracks_(tracks) {}
 
   bool begin(int startIndex, float startSeconds, float volumeDb);
@@ -50,7 +50,7 @@ class LocalPlayer : public MediaBackend {
   void advance(int direction);
 
   fs::FS& fs_;
-  std::vector<Track> tracks_;
+  std::vector<MediaTrack> tracks_;
   int  index_ = 0;
   bool paused_ = false;
   bool stopped_ = false;

@@ -199,6 +199,16 @@ class File : public Stream {
   void rewindDirectory(void) { if (impl_) impl_->rewindDirectory(); }
   // For a read-only handle this is simply what is left.
   int available() { return impl_ ? (int)(impl_->size() - impl_->position()) : 0; }
+  String readString() {
+    String out;
+    uint8_t buf[64];
+    while (true) {
+      size_t n = read(buf, sizeof(buf));
+      if (n == 0) break;
+      for (size_t i = 0; i < n; i++) out += (char)buf[i];
+    }
+    return out;
+  }
   String readStringUntil(char terminator) {
     String out;
     uint8_t c;

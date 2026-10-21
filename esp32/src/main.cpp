@@ -11,10 +11,15 @@
 #include "controller.h"
 #include "controls.h"
 #include "resume.h"
+#include "spotify_blob.h"
 #include "status_led.h"
 #include "usb_stick.h"
 #include "wifi_config.h"
 #include "wifi_link.h"
+
+#if defined(MBXCSPOT)
+#include "cspot_boot.h"
+#endif
 
 static ResumeStore store;
 static Controller* box = nullptr;      // exists only while a stick is mounted
@@ -43,6 +48,36 @@ static void maybeProvision() {
   Serial.printf("[wifi] stored credentials for '%s' (password %s)\n", config.ssid.c_str(),
                 config.password.length() ? "set" : "empty, open network");
   wifiStart();
+
+  // The same stick can also carry cspot's credentials, so no pairing UI is ever needed.
+  String blob;
+  String blobError;
+  if (readSpotifyBlob(mbx::usbStick.storage().fs(), "/", blob, &blobError)) {
+    Serial.println(saveSpotifyBlob(blob) ? "[spotify] credentials stored"
+                                        : "[spotify] could not store credentials");
+  } else if (blobError != "no spotify.json on the stick") {
+    Serial.printf("[spotify] %s\n", blobError.c_str());
+  }
+}
+
+// Spotify needs the network and a stored blob. Retried lazily so a missing credential or an
+// unplugged router never blocks local playback.
+static void maybeBootSpotify() {
+#if defined(MBXCSPOT)
+  static uint32_t lastAttempt = 0;
+  if (cspotReady() || !wifiConnected()) return;
+  if (millis() - lastAttempt < 10000) return;
+  lastAttempt = millis();
+
+  String blob;
+  if (!loadSpotifyBlob(blob)) return;      // nothing to authenticate with yet
+  String error;
+  if (cspotBoot(blob, "Musicbox", &error)) {
+    Serial.println("[spotify] session started");
+  } else {
+    Serial.printf("[spotify] %s\n", error.c_str());
+  }
+#endif
 }
 
 static void startFromStick() {
@@ -159,5 +194,6 @@ void loop() {
 
   if (box) box->poll();
   wifiPoll();
+  maybeBootSpotify();
   delay(2);
 }

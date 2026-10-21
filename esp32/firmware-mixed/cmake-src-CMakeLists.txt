@@ -43,6 +43,5 @@ target_include_directories(${COMPONENT_LIB} BEFORE PRIVATE ${_cspot_incs} ${_bel
 # Probe-only: force the linker to pull cspot's core out of libcspot.a. Without this the
 # Arduino-side main() never constructs a SpircHandler, so -ffunction-sections/--gc-sections
 # drops every cspot object and the image would not prove the second half really links.
-target_link_libraries(${COMPONENT_LIB} INTERFACE
-    "-u _ZN5cspot12SpircHandlerC1ESt10shared_ptrINS_7ContextEE"
-    "-u _ZN5cspot12SpircHandler10disconnectEv")
+# The force-link (-u SpircHandler::...) is gone: main.cpp now calls cspotBoot(), which
+# constructs a SpircHandler for real, so the linker keeps cspot on its own merits.

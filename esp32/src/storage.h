@@ -9,7 +9,7 @@
 #include <FS.h>
 #include <vector>
 
-struct Track {
+struct MediaTrack {   // not `Track`: cspot/bell own that name
   String   path;    // absolute path on the mounted filesystem
   String   rel;     // path relative to the card root: what resume state stores
   uint32_t size = 0;
@@ -17,7 +17,7 @@ struct Track {
 
 struct MediaSet {
   String identity;            // "content:<8 hex>" - NVS keys are limited to 15 chars
-  std::vector<Track> tracks;  // natural order
+  std::vector<MediaTrack> tracks;  // natural order
 };
 
 // Walks `root` for MUSIC_EXTENSIONS and fills `out`. Returns false when the walk

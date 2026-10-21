@@ -49,7 +49,7 @@ static void walk(fs::FS& fs, const String& dir, const String& rel, int depth,
     if (f.isDirectory()) {
       walk(fs, dir + "/" + name, childRel, depth + 1, out);
     } else if (musicNameIsPlayable(name)) {
-      Track t;
+      MediaTrack t;
       t.path = dir + "/" + name;
       t.rel  = childRel;
       t.size = f.size();
@@ -78,12 +78,12 @@ bool scanMedia(fs::FS& fs, const char* root, MediaSet& out) {
   if (out.tracks.empty()) return false;
 
   std::sort(out.tracks.begin(), out.tracks.end(),
-            [](const Track& a, const Track& b) { return naturalLess(a.rel, b.rel); });
+            [](const MediaTrack& a, const MediaTrack& b) { return naturalLess(a.rel, b.rel); });
 
   // Identity over path+size, in scan order: adding or removing a file changes it, which
   // is what makes two different sticks resume independently.
   uint32_t h = 2166136261u;
-  for (const Track& t : out.tracks) {
+  for (const MediaTrack& t : out.tracks) {
     h = fnv1a(t.rel, h);
     h = fnv1a(String(t.size), h);
   }

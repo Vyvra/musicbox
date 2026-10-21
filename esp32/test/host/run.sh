@@ -16,7 +16,8 @@ trap 'rm -rf "$TMP"' EXIT
 # the two variants exercise per-stick volume and an audio-only stick.
 for spec in "fat16 16 " "fat32 64 " "fat16 16 local" "fat16 16 defaultvol" \
             "fat16 16 fragmented" "fat16 16 wifi" "fat16 16 wifi_alias" \
-            "fat16 16 wifi_nosssid"; do
+            "fat16 16 wifi_nosssid" "fat16 16 spotify" "fat16 16 spotify_empty" \
+            "fat16 16 spotify_big"; do
   set -- $spec
   kind=$1; size=$2; variant=${3:-}
   name="$kind${variant:+_$variant}"
@@ -38,8 +39,8 @@ g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
 g++ -std=c++17 -O2 -Wall -Wextra -o "$TMP/test_fragmented" test_fragmented.cpp \
     ../../src/fat_reader.cpp
 g++ -std=c++17 -O2 -Wall -Wextra -I . -I stubs -I ../../src -o "$TMP/test_provisioning" \
-    test_provisioning.cpp ../../src/wifi_config.cpp ../../src/musicbox_txt.cpp \
-    ../../src/usb_fs.cpp ../../src/fat_reader.cpp
+    test_provisioning.cpp ../../src/wifi_config.cpp ../../src/spotify_blob.cpp \
+    ../../src/musicbox_txt.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
 g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
     -o "$TMP/test_spotify" test_spotify.cpp fake_players.cpp ../../src/spotify_uri.cpp \
     ../../src/spotify_backend.cpp ../../src/controller.cpp ../../src/musicbox_txt.cpp \
@@ -61,7 +62,8 @@ echo "== fragmented file: cluster chain that jumps over a hole"
 echo
 echo "== provisioning: wifi.txt parsing and the NVS round trip"
 "$TMP/test_provisioning" "$TMP/fat16_wifi.img" "$TMP/fat16_wifi_alias.img" \
-    "$TMP/fat16_wifi_nosssid.img" "$TMP/fat16_local.img" || status=1
+    "$TMP/fat16_wifi_nosssid.img" "$TMP/fat16_local.img" "$TMP/fat16_spotify.img" \
+    "$TMP/fat16_spotify_empty.img" "$TMP/fat16_spotify_big.img" || status=1
 
 echo
 echo "== logic: musicbox.txt, ordering, resume, control vocabulary"

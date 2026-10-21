@@ -28,7 +28,7 @@
 #include <memory>
 #include <string>
 
-#include "spotify_session.h"
+#include "spotify_cspot.h"
 
 #include <SpircHandler.h>
 

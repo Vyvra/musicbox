@@ -69,6 +69,15 @@ def build(out_path, kind, size_mb, variant=""):
         else:
             wifi = b'password="abc"\n'          # no ssid: must be rejected
         files = list(FILES) + [("wifi.txt", wifi, False)]
+    if variant in ("spotify", "spotify_empty", "spotify_big"):
+        if variant == "spotify":
+            blob = (b'{"username":"exampleuser","authType":1,'
+                    b'"authData":"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="}')
+        elif variant == "spotify_empty":
+            blob = b"\n\n"
+        else:
+            blob = b'{"authData":"' + b"A" * 4000 + b'"}'
+        files = list(FILES) + [("spotify.json", blob, False)]
     if variant == "local":
         files = [(n, (b'shuffle="on"\n' if n == "musicbox.txt" else c), f)
                  for (n, c, f) in FILES]

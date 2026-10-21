@@ -8,9 +8,9 @@ working tree itself is at `~/build/mixed` (a sandbox: cspot's sources are not ve
 | --- | --- |
 | frameworks | PlatformIO `framework = arduino, espidf` → **Arduino 3.3.12 + ESP-IDF 5.5.5 + GCC 14.2** |
 | board | `esp32-s3-devkitc-1`, 16 MB flash, `qio_opi` PSRAM, `default_16MB.csv` |
-| result | `firmware.bin` **2,150,352 B** · app **31.6 %** of a 6.25 MB partition · RAM **22.9 %** |
+| result | **flash 39.4 %** · **771 `cspot::` symbols**, linked because our code constructs them |
 | clean build | **110 s** |
-| proof | the ELF contains **462 `cspot::`** and 161 `bell::` symbols (SpircHandler, MercurySession, TLSSocket, X509Bundle, AccessKeyFetcher, TrackQueue) |
+| proof | **771 `cspot::`** symbols (SpircHandler, MercurySession, TLSSocket, X509Bundle, AccessKeyFetcher, TrackQueue) |
 
 Our sources are compiled **verbatim** — including `integration/spotify_cspot.cpp` — so the
 seam and the adapter are the ones the host tests cover.
@@ -50,13 +50,15 @@ no duplicated mbedTLS, and bell's vendored dependency tree needed no restructuri
 
 ## What this does *not* prove
 
-⚠️ **cspot is in the image only because it is force-linked** (`-u SpircHandler::…` in
-`src/CMakeLists.txt`). Nothing constructs a `SpircHandler` yet, so `--gc-sections` would
-otherwise drop it. Likewise the **MAX98357A sink is compiled but never instantiated**, because
-the sink is created in cspot's own `main.cpp`, which our app replaces.
+✅ **The force-link is gone.** An earlier version kept cspot in the image with
+`-u SpircHandler::…`; now `integration/cspot_boot.cpp` constructs the session itself
+(`Context` → authenticate → `SpircHandler` → `MAX98357AAudioSink` → data callback → event
+handler), so the linker keeps it on its own merits — and the symbol count rose from 462 to 771
+because more of cspot is genuinely reachable.
 
-So the image proves the two halves *compile and link* together. It does not prove Spotify
-plays.
+What is still unproven is **runtime**: mDNS/SPIRC/CDN have never run on the chip, Wi-Fi has
+never connected on this hardware, and the credentials blob has never been produced by a real
+pairing (it can also come from the config stick).
 
 ## The remaining work (visible now that cspot's boot code has been read)
 

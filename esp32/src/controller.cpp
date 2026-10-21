@@ -60,8 +60,8 @@ bool Controller::begin() {
     // meaningless. Getting this wrong is subtle: shuffling from index 1 while keeping the
     // resume index plays a *different* track at the saved position. The Pi does exactly
     // this in shuffled_from().
-    Track head = media_.tracks[startIndex];
-    std::vector<Track> rest;
+    MediaTrack head = media_.tracks[startIndex];
+    std::vector<MediaTrack> rest;
     rest.reserve(media_.tracks.size() - 1);
     for (size_t i = 0; i < media_.tracks.size(); i++) {
       if ((int)i != startIndex) rest.push_back(media_.tracks[i]);
