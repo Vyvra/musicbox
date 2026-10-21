@@ -1,4 +1,4 @@
---- ~/build/cspot/cspot/CMakeLists.txt	2026-10-20 21:28:37.163615207 +0200
+--- cspot-source/cspot/CMakeLists.txt	2026-10-20 21:28:37.163615207 +0200
 +++ cspot/CMakeLists.txt	2026-10-20 23:02:30.622805193 +0200
 @@ -25,15 +25,29 @@
  endif()

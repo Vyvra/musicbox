@@ -1,3 +1,6 @@
 images/*.img
 images/*.img.xz
 credentials.txt
+__pycache__/
+*.pyc
+.pio/
