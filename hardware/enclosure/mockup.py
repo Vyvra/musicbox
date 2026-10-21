@@ -1,51 +1,57 @@
 #!/usr/bin/env python3
-"""Dimensioned three-view mockup of the music box enclosure.
+"""Dimensioned mockup of the music box enclosure.
 
-The "comb" on the roof is not cut into the wood: the teeth in the sketch are the USB sticks
-themselves, each plugged into its own slot in the roof and standing perpendicular to the
-slope. One slot at the ridge is the wired port that plays; the rest are storage.
+Layout, in the order the user described it: flat base, short vertical ends, steep roof slopes at
+ROOF_DEG rising to a FLAT PLATEAU, and the two front panels angled in plan (a shallow V) meeting
+at a vertical ridge. Spare sticks stand in slots on the slopes turned SIDEWAYS, so from the front
+only their thin edge shows; the playing stick sits in the plateau facing the viewer, label
+readable.
 
-Everything comes from PARAMS:
+    python3 mockup.py            # writes mockup.svg
 
-    python3 mockup.py            # writes mockup.svg beside this file
-
-Millimetres throughout, so the SVG prints 1:1.
+Millimetres throughout; the SVG prints 1:1.
 """
 import math
 from pathlib import Path
 
-PARAMS = {
+P = {
     # --- envelope -----------------------------------------------------------------------
-    "W": 300.0,          # overall width
-    "H": 120.0,          # height at the ends
-    "PEAK": 55.0,        # ridge rise above the ends
-    "D": 110.0,          # depth: flat front-to-back
-    "V_DEPTH": 22.0,     # how far the front ridge protrudes past the ends (the angled front)
-    # --- material -----------------------------------------------------------------------
+    "W": 200.0,          # overall width
+    "H": 50.0,           # straight end height, before the roof starts
+    "ROOF_DEG": 40.0,    # roof slope, degrees from horizontal
+    "FLAT": 36.0,        # width of the flat plateau at the top
+    "D": 90.0,           # overall depth, back face to the front ridge (the thickest point)
+    "V": 16.0,           # how far the front ridge stands proud of the front's outer corners
     "T": 4.0,            # plywood thickness
-    # --- front face ---------------------------------------------------------------------
-    "GRILL_D": 62.0,     # speaker grill (fits a ~50 mm driver)
+    # --- front furniture ----------------------------------------------------------------
+    "GRILL_D": 44.0,
     "BTN_COUNT": 4,
-    "BTN_D": 13.0,
-    "BTN_X": 52.0,
-    "KNOB_D": 22.0,
-    "KNOB_X": 248.0,
-    "CTRL_Y": 42.0,
-    # --- roof: one slot per stored stick ------------------------------------------------
-    "SLOTS_PER_SIDE": 4,  # spare sticks each side of the ridge
-    "SLOT_PITCH": 34.0,   # spacing between slot centres along the slope
-    "SLOT_W": 14.0,       # opening for the stick's metal connector (USB-A is ~12.5 mm)
-    "SLOT_D": 11.0,       # how deep the connector sits below the surface
-    "STICK_LEN": 46.0,    # how far a stick stands proud of the roof
-    "STICK_W": 20.0,      # stick width
+    "BTN_D": 12.0,
+    "BTN_X": 38.0,
+    "KNOB_D": 20.0,
+    "KNOB_X": 168.0,
+    "CTRL_Y": 26.0,
+    # --- roof slots ---------------------------------------------------------------------
+    "SLOTS_PER_SIDE": 3,
+    "SLOT_W": 11.0,      # slot width seen from the front = the stick's THIN dimension
+    "STICK_LEN": 46.0,
+    "STICK_THIN": 10.0,  # stick thickness (what the front view shows for spare sticks)
+    "STICK_WIDE": 20.0,  # stick width (what the front view shows for the playing stick)
 }
 
-MARGIN = 24.0
-GAP = 34.0
+MARGIN = 22.0
+GAP = 30.0
 
 
 def f(v):
     return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def derived(p):
+    run = (p["W"] - p["FLAT"]) / 2               # horizontal run of one slope
+    peak = run * math.tan(math.radians(p["ROOF_DEG"]))
+    slope = run / math.cos(math.radians(p["ROOF_DEG"]))
+    return {"run": run, "peak": peak, "slope": slope, "side_depth": p["D"] - p["V"]}
 
 
 class Sheet:
@@ -60,16 +66,16 @@ class Sheet:
         self.parts.append(f'<line x1="{f(x1)}" y1="{f(y1)}" x2="{f(x2)}" y2="{f(y2)}" '
                           f'stroke="{colour}" stroke-width="{w}"{d}/>')
 
-    def poly(self, pts, w=0.9, closed=True, colour="#111", fill="none", dash=None):
+    def poly(self, pts, w=0.9, closed=True, colour="#111", dash=None):
         s = " ".join(f"{f(x)},{f(y)}" for x, y in pts)
         tag = "polygon" if closed else "polyline"
         d = f' stroke-dasharray="{dash}"' if dash else ""
-        self.parts.append(f'<{tag} points="{s}" fill="{fill}" stroke="{colour}" '
+        self.parts.append(f'<{tag} points="{s}" fill="none" stroke="{colour}" '
                           f'stroke-width="{w}"{d}/>')
 
-    def circle(self, cx, cy, r, w=0.8, dash=None, fill="none", colour="#111"):
+    def circle(self, cx, cy, r, w=0.8, dash=None, colour="#111"):
         d = f' stroke-dasharray="{dash}"' if dash else ""
-        self.parts.append(f'<circle cx="{f(cx)}" cy="{f(cy)}" r="{f(r)}" fill="{fill}" '
+        self.parts.append(f'<circle cx="{f(cx)}" cy="{f(cy)}" r="{f(r)}" fill="none" '
                           f'stroke="{colour}" stroke-width="{w}"{d}/>')
 
     def text(self, x, y, s, size=4.0, anchor="middle", bold=False, colour="#111"):
@@ -78,11 +84,11 @@ class Sheet:
                           f'font-size="{f(size)}" text-anchor="{anchor}" fill="{colour}"{b}>'
                           f'{s}</text>')
 
-    def leader(self, x1, y1, x2, y2, s, size=3.4):
+    def leader(self, x1, y1, x2, y2, s, size=3.3):
         self.line(x1, y1, x2, y2, w=0.3, dash="1.5,1.5", colour="#555")
-        self.text(x2, y2 - 1.5 if y2 < y1 else y2 + 4.5, s, size=size, colour="#222")
+        self.text(x2, y2 - 1.5 if y2 < y1 else y2 + 4.2, s, size=size, colour="#222")
 
-    def dim(self, x1, y1, x2, y2, label, offset=0.0, size=3.4):
+    def dim(self, x1, y1, x2, y2, label, offset=0.0, size=3.3):
         dx, dy = x2 - x1, y2 - y1
         ln = math.hypot(dx, dy) or 1.0
         nx, ny = -dy / ln, dx / ln
@@ -90,8 +96,8 @@ class Sheet:
         ax2, ay2 = x2 + nx * offset, y2 + ny * offset
         self.line(ax1, ay1, ax2, ay2, w=0.3)
         for px, py in ((ax1, ay1), (ax2, ay2)):
-            self.line(px - nx * 1.4, py - ny * 1.4, px + nx * 1.4, py + ny * 1.4, w=0.3)
-        self.text((ax1 + ax2) / 2 + nx * 3.0, (ay1 + ay2) / 2 + ny * 3.0, label, size=size)
+            self.line(px - nx * 1.3, py - ny * 1.3, px + nx * 1.3, py + ny * 1.3, w=0.3)
+        self.text((ax1 + ax2) / 2 + nx * 2.8, (ay1 + ay2) / 2 + ny * 2.8, label, size=size)
 
     def svg(self):
         return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{f(self.width)}mm" '
@@ -100,36 +106,30 @@ class Sheet:
                 + "\n".join(self.parts) + "\n</svg>\n")
 
 
-def roof_h(x, p):
-    """Roof height at horizontal position x, ridge at W/2 (y up)."""
-    return p["H"] + p["PEAK"] - abs(x - p["W"] / 2) * (p["PEAK"] / (p["W"] / 2))
+def roof_h(x, p, d):
+    """Height of the roof at x: flat across the plateau, then the slopes (y up)."""
+    left, right = (p["W"] - p["FLAT"]) / 2, (p["W"] + p["FLAT"]) / 2
+    if left <= x <= right:
+        return p["H"] + d["peak"]
+    run = (left - x) if x < left else (x - right)
+    return p["H"] + d["peak"] - run * math.tan(math.radians(p["ROOF_DEG"]))
 
 
-def roof_normal(x, p):
-    """Outward normal of the roof at x, as a unit vector in maths coordinates (y up)."""
-    half = p["W"] / 2
-    slope = p["PEAK"] / half                 # rise per unit run
-    dx = 1.0 if x > p["W"] / 2 else -1.0
-    # surface tangent (dx, dx*slope) -> normal (dx*slope, -1) normalised, flipped upward
-    nx, ny = dx * slope, 1.0
-    ln = math.hypot(nx, ny)
-    return nx / ln, ny / ln
+def roof_normal(x, p, d):
+    """Outward unit normal at x; flat on the plateau."""
+    left, right = (p["W"] - p["FLAT"]) / 2, (p["W"] + p["FLAT"]) / 2
+    if left <= x <= right:
+        return 0.0, 1.0
+    slope = math.tan(math.radians(p["ROOF_DEG"]))
+    nx = slope if x > right else -slope
+    ln = math.hypot(nx, 1.0)
+    return nx / ln, 1.0 / ln
 
 
-def stick_shape(slot_x, slot_y, normal, length, width):
-    """Quad for a stick standing on a slot, in maths coords."""
-    nx, ny = normal
-    tx, ty = -ny, nx                          # along the slot, perpendicular to the stick
-    tip = (slot_x + nx * length, slot_y + ny * length)
-    return [(slot_x - tx * width / 2, slot_y - ty * width / 2),
-            (slot_x + tx * width / 2, slot_y + ty * width / 2),
-            (tip[0] + tx * width / 2, tip[1] + ty * width / 2),
-            (tip[0] - tx * width / 2, tip[1] - ty * width / 2)]
-
-
-def front(s, ox, base, p):
-    """Front elevation: angled face, furniture, and the roof with its slots and sticks."""
-    W, H, PEAK = p["W"], p["H"], p["PEAK"]
+def front(s, ox, base, p, d):
+    W, H, FLAT, V = p["W"], p["H"], p["FLAT"], p["V"]
+    peak = d["peak"]
+    left, right = (W - FLAT) / 2, (W + FLAT) / 2
 
     def X(x):
         return ox + x
@@ -137,140 +137,171 @@ def front(s, ox, base, p):
     def Y(y):
         return base - y
 
-    s.poly([(X(0), Y(0)), (X(0), Y(H)), (X(W / 2), Y(H + PEAK)), (X(W), Y(H)), (X(W), Y(0))])
-    s.line(X(W / 2), Y(0), X(W / 2), Y(H + PEAK), w=0.5, dash="2.5,2")
+    s.poly([(X(0), Y(0)), (X(0), Y(H)), (X(left), Y(H + peak)), (X(right), Y(H + peak)),
+            (X(W), Y(H)), (X(W), Y(0))])
+    # the two front panels meet at the ridge, which is also the centre of the plateau
+    s.line(X(W / 2), Y(0), X(W / 2), Y(H + peak), w=0.5, dash="2.5,2")
 
-    # speaker grill, straddling the seam
+    # grill
     gx, gy, r = W / 2, p["CTRL_Y"], p["GRILL_D"] / 2
     s.circle(X(gx), Y(gy), r, w=0.7)
     s.circle(X(gx), Y(gy), r - 2.5, w=0.3, dash="1,1.5")
-    for ring_r, count in ((r - 7, 16), (r - 16, 10), (r - 25, 5)):
+    for ring_r, count in ((r - 7, 14), (r - 15, 9), (r - 23, 4)):
         for i in range(count):
-            a = 2 * math.pi * i / count + 0.3
-            s.circle(X(gx + ring_r * math.cos(a)), Y(gy + ring_r * math.sin(a)), 1.5, w=0.3)
+            a = 2 * math.pi * i / count + 0.35
+            s.circle(X(gx + ring_r * math.cos(a)), Y(gy + ring_r * math.sin(a)), 1.4, w=0.3)
 
-    # buttons
+    # buttons and knob
     for i in range(p["BTN_COUNT"]):
-        cx = p["BTN_X"] + (i - (p["BTN_COUNT"] - 1) / 2) * (p["BTN_D"] + 7)
-        s.circle(X(cx), Y(p["CTRL_Y"]), p["BTN_D"] / 2, w=0.6)
-        s.circle(X(cx), Y(p["CTRL_Y"]), p["BTN_D"] / 2 - 2, w=0.25)
+        cx = p["BTN_X"] + (i - (p["BTN_COUNT"] - 1) / 2) * (p["BTN_D"] + 6)
+        s.circle(X(cx), Y(gy), p["BTN_D"] / 2, w=0.6)
+    kx = p["KNOB_X"]
+    s.circle(X(kx), Y(gy), p["KNOB_D"] / 2, w=0.9)
+    s.circle(X(kx), Y(gy), p["KNOB_D"] / 2 - 3, w=0.3, dash="1.5,1")
+    s.line(X(kx), Y(gy), X(kx), Y(gy + p["KNOB_D"] / 2 - 3))
 
-    # knob
-    s.circle(X(p["KNOB_X"]), Y(p["CTRL_Y"]), p["KNOB_D"] / 2, w=0.9)
-    s.circle(X(p["KNOB_X"]), Y(p["CTRL_Y"]), p["KNOB_D"] / 2 - 3, w=0.3, dash="1.5,1")
-    s.line(X(p["KNOB_X"]), Y(p["CTRL_Y"]), X(p["KNOB_X"]), Y(p["CTRL_Y"] + p["KNOB_D"] / 2 - 3))
-
-    # roof slots, with the stored sticks standing perpendicular to each slope
+    # spare sticks: SIDEWAYS, so the front view shows only the thin edge
     for side in (-1, 1):
         for i in range(p["SLOTS_PER_SIDE"]):
-            sx = W / 2 + side * (p["SLOT_W"] + 14 + i * p["SLOT_PITCH"])
-            if not (10 < sx < W - 10):
-                continue
-            sy = roof_h(sx, p)
-            n = roof_normal(sx, p)
-            # the slot itself: a dark opening on the roof line
+            span = d["run"] / (p["SLOTS_PER_SIDE"] + 1)
+            run_pos = span * (i + 1)
+            sx = left - run_pos if side < 0 else right + run_pos
+            sy = roof_h(sx, p, d)
+            n = roof_normal(sx, p, d)
+            tx, ty = -n[1], n[0]
+            w2 = p["STICK_THIN"] / 2
+            tip = (sx + n[0] * p["STICK_LEN"], sy + n[1] * p["STICK_LEN"])
+            s.poly([(X(sx - tx * w2), Y(sy - ty * w2)), (X(sx + tx * w2), Y(sy + ty * w2)),
+                    (X(tip[0] + tx * w2), Y(tip[1] + ty * w2)),
+                    (X(tip[0] - tx * w2), Y(tip[1] - ty * w2))], w=0.8)
             s.line(X(sx - p["SLOT_W"] / 2), Y(sy), X(sx + p["SLOT_W"] / 2), Y(sy),
-                   w=2.2, colour="#666")
-            # the stick standing in it
-            quad = stick_shape(sx, sy, n, p["STICK_LEN"], p["STICK_W"])
-            s.poly([(X(qx), Y(qy)) for qx, qy in quad], w=0.8)
-            # a hint of the connector below the surface
-            s.poly([(X(sx - p["SLOT_W"] / 2), Y(sy)),
-                    (X(sx - p["SLOT_W"] / 2), Y(sy - p["SLOT_D"])),
-                    (X(sx + p["SLOT_W"] / 2), Y(sy - p["SLOT_D"])),
-                    (X(sx + p["SLOT_W"] / 2), Y(sy))], w=0.35, colour="#888", dash="1.5,1.5")
+                   w=2.0, colour="#666")
 
-    # the playing stick: vertical, at the ridge, in the wired port
-    peak = H + PEAK
-    s.line(X(W / 2 - p["SLOT_W"] / 2), Y(peak), X(W / 2 + p["SLOT_W"] / 2), Y(peak),
-           w=2.2, colour="#000")
-    s.poly([(X(W / 2 - 10), Y(peak)), (X(W / 2 - 10), Y(peak + 46)),
-            (X(W / 2 + 10), Y(peak + 46)), (X(W / 2 + 10), Y(peak))], w=0.9)
-    s.circle(X(W / 2), Y(peak + 36), 2.4, w=0.5)
+    # the playing stick: in the plateau, face on so its label reads
+    peak_y = H + peak
+    s.line(X(W / 2 - 7), Y(peak_y), X(W / 2 + 7), Y(peak_y), w=2.0, colour="#000")
+    hw = p["STICK_WIDE"] / 2
+    s.poly([(X(W / 2 - hw), Y(peak_y)), (X(W / 2 - hw), Y(peak_y + p["STICK_LEN"])),
+            (X(W / 2 + hw), Y(peak_y + p["STICK_LEN"])), (X(W / 2 + hw), Y(peak_y))], w=0.9)
+    s.line(X(W / 2 - hw + 3), Y(peak_y + 30), X(W / 2 + hw - 3), Y(peak_y + 30),
+           w=0.4, colour="#777")
 
     # callouts
-    s.leader(X(W / 2 + r * 0.7), Y(gy + r * 0.7), X(W / 2 + 48), Y(gy + 46), "speaker grill")
-    s.leader(X(p["BTN_X"]), Y(p["CTRL_Y"] + p["BTN_D"]), X(p["BTN_X"] - 4), Y(p["CTRL_Y"] + 26),
-             "media buttons")
-    s.leader(X(p["KNOB_X"]), Y(p["CTRL_Y"] + p["KNOB_D"] / 2), X(p["KNOB_X"] + 6),
-             Y(p["CTRL_Y"] + 28), "volume knob")
-    sx_probe = W / 2 + (p["SLOT_W"] + 14 + p["SLOT_PITCH"] * 1.5)
-    s.leader(X(sx_probe), Y(roof_h(sx_probe, p) + p["STICK_LEN"] * 0.8),
-             X(sx_probe) - 10, Y(H + PEAK + 24),
-             "spare sticks stand in roof slots")
-    s.leader(X(W / 2 + 9), Y(peak + 30), X(W / 2 + 42), Y(peak + 58), "playing stick (wired port)")
+    s.leader(X(W / 2 + r * 0.7), Y(gy + r * 0.7), X(W / 2 + 40), Y(gy + 30), "speaker grill")
+    s.leader(X(p["BTN_X"]), Y(gy + p["BTN_D"]), X(p["BTN_X"] - 14), Y(gy + 22), "buttons")
+    s.leader(X(kx), Y(gy + p["KNOB_D"] / 2), X(kx + 12), Y(gy + 20), "volume knob")
+    s.leader(X(right + 12), Y(roof_h(right + 12, p, d) + 26), X(right + 30), Y(H + peak + 26),
+             "spare sticks, edge-on")
+    s.leader(X(W / 2 + hw - 2), Y(peak_y + 34), X(W / 2 + 34), Y(peak_y + 48),
+             "playing stick, face-on")
 
-    s.dim(X(0), Y(0) + 12, X(W), Y(0) + 12, f"W {p['W']:.0f}")
-    s.dim(X(0) - 11, Y(0), X(0) - 11, Y(H), f"H {p['H']:.0f}")
-    s.dim(X(W) + 11, Y(H), X(W) + 11, Y(H + PEAK), f"{p['PEAK']:.0f}")
-    s.dim(X(0), Y(0), X(p["BTN_X"]), Y(0), f"{p['BTN_X']:.0f}", offset=22)
-    s.dim(X(0), Y(0), X(p["KNOB_X"]), Y(0), f"{p['KNOB_X']:.0f}", offset=29)
-    s.text(X(W / 2), Y(0) + 26, "FRONT ELEVATION", size=5, bold=True)
-    s.ensure(X(W) + 34, base + 34)
+    # dimensions
+    s.dim(X(0), Y(0) + 10, X(W), Y(0) + 10, f"W {W:.0f}")
+    s.dim(X(0) - 10, Y(0), X(0) - 10, Y(H), f"H {H:.0f}")
+    s.dim(X(W) + 10, Y(H), X(W) + 10, Y(H + peak), f"peak {peak:.0f}")
+    s.dim(X(left), Y(H + peak) + 6, X(right), Y(H + peak) + 6, f"flat {FLAT:.0f}", offset=-6)
+    s.text(X(W / 2), Y(0) + 22, "FRONT ELEVATION", size=4.8, bold=True)
+    s.ensure(X(W) + 30, base + 30)
 
 
-def plan(s, ox, oy, p):
-    """Plan: shallow V front, flat back, ridge with the slot row running front to back."""
-    W, D, V = p["W"], p["D"], p["V_DEPTH"]
-    s.poly([(ox, oy), (ox + W / 2, oy - V), (ox + W, oy), (ox + W, oy + D), (ox, oy + D)])
-    s.line(ox + W / 2, oy - V, ox + W / 2, oy + D, w=0.5, dash="2.5,2")
-
-    # slots along the ridge: short openings, drawn as dark bars
+def plan(s, ox, oy, p, d):
+    W, D, V, FLAT = p["W"], p["D"], p["V"], p["FLAT"]
+    side_depth = d["side_depth"]
+    # back face at oy, front corners at oy + side_depth, ridge apex at oy + D
+    s.poly([(ox, oy), (ox + W, oy), (ox + W, oy + side_depth), (ox + W / 2, oy + D),
+            (ox, oy + side_depth)])
+    s.line(ox + W / 2, oy + D, ox + W / 2, oy, w=0.5, dash="2.5,2")
+    # plateau strip
+    s.line(ox + (W - FLAT) / 2, oy, ox + (W - FLAT) / 2, oy + D, w=0.45, dash="1.5,2")
+    s.line(ox + (W + FLAT) / 2, oy, ox + (W + FLAT) / 2, oy + D, w=0.45, dash="1.5,2")
+    # slot positions, running front to back with the sticks' thin side facing front
     for side in (-1, 1):
         for i in range(p["SLOTS_PER_SIDE"]):
-            sx = W / 2 + side * (p["SLOT_W"] + 14 + i * p["SLOT_PITCH"])
-            if 10 < sx < W - 10:
-                s.line(ox + sx, oy + 14, ox + sx, oy + D - 14, w=0.4, dash="1.5,2.5")
-    s.line(ox + W / 2, oy - V + 14, ox + W / 2, oy + D - 14, w=1.6, colour="#000")
-
-    s.dim(ox, oy + D + 12, ox + W, oy + D + 12, f"W {W:.0f}")
-    s.dim(ox + W + 11, oy - V, ox + W + 11, oy + D, f"D {D:.0f}")
-    s.dim(ox + W / 2, oy, ox + W / 2, oy - V, f"V {V:.0f}", offset=7, size=3.0)
-    s.text(ox + W / 2, oy + D + 25,
-           "PLAN — front edge (top) is the shallow V; ridge slots run front to back",
-           size=4.6, bold=True)
-    s.ensure(ox + W + 30, oy + D + 34)
+            span = d["run"] / (p["SLOTS_PER_SIDE"] + 1)
+            x = W / 2 + side * ((W - FLAT) / 2 - 0) - 0
+            x = (W - FLAT) / 2 - span * (i + 1) if side < 0 else (W + FLAT) / 2 + span * (i + 1)
+            s.line(ox + x, oy + 8, ox + x, oy + D - 8, w=0.3, dash="1.2,2.5")
+    s.dim(ox, oy + D + 10, ox + W, oy + D + 10, f"W {W:.0f}")
+    s.dim(ox + W + 10, oy, ox + W + 10, oy + D, f"D {D:.0f}")
+    s.text(ox + W / 2, oy + D + 20,
+           "PLAN - back edge at the top, front V at the bottom, plateau dashed", size=4.4, bold=True)
+    s.ensure(ox + W + 26, oy + D + 26)
 
 
-def side(s, ox, base, p):
-    """Side (right): depth against end height; flat removable back panel at the right."""
-    H, D, PEAK = p["H"], p["D"], p["PEAK"]
-    s.poly([(ox, base), (ox + D, base), (ox + D, base - H), (ox, base - H)])
+def side(s, ox, base, p, d):
+    H, D, PEAK, FLAT = p["H"], p["D"], d["peak"], p["FLAT"]
+    side_depth = d["side_depth"]
+    s.poly([(ox, base), (ox + side_depth, base), (ox + side_depth, base - H),
+            (ox, base - H)])
     s.line(ox, base - H - PEAK, ox + D, base - H - PEAK, w=0.45, dash="2.5,2")
-    s.text(ox + D / 2, base - H - PEAK - 4, "ridge (hidden behind the side wall)",
-           size=3.0, colour="#555")
-    # sticks standing perpendicular to the (invisible) roof, near the ridge line
-    sx = ox + D * 0.45
-    s.poly([(sx, base - H - PEAK), (sx, base - H - PEAK - 46),
-            (sx + 14, base - H - PEAK - 46), (sx + 14, base - H - PEAK)], w=0.8,
-           colour="#777", dash="2,1.5")
-    # the flat back panel, removable
-    s.line(ox + D, base, ox + D, base - H, w=1.6)
-    s.text(ox + D + 6, base - H / 2, "back panel", size=3.2, anchor="start", colour="#333")
-    s.text(ox + D + 6, base - H / 2 + 4, "(flat, removable)", size=3.0, anchor="start",
-           colour="#666")
-    s.dim(ox, base + 12, ox + D, base + 12, f"D {D:.0f}")
-    s.dim(ox + D + 26, base, ox + D + 26, base - H - PEAK, f"{H + PEAK:.0f}")
-    s.text(ox + D / 2, base + 24, "SIDE (right)", size=4.6, bold=True)
-    s.ensure(ox + D + 44, base + 34)
+    s.text(ox + D / 2, base - H - PEAK - 4, "plateau", size=3.0, colour="#555")
+    # spare sticks, seen edge-on from the side: full length visible
+    for i in range(p["SLOTS_PER_SIDE"]):
+        sx = ox + 16 + i * 22
+        s.poly([(sx, base - H), (sx, base - H - 30), (sx + 12, base - H - 30),
+                (sx + 12, base - H)], w=0.5, colour="#888", dash="2,1.5")
+    s.dim(ox, base + 10, ox + side_depth, base + 10, f"side depth {side_depth:.0f}")
+    s.dim(ox + D + 8, base, ox + D + 8, base - H - PEAK, f"{H + PEAK:.0f}")
+    s.text(ox + D / 2, base + 20, "SIDE", size=4.4, bold=True)
+    s.ensure(ox + D + 26, base + 26)
+
+
+def top_plates(s, ox, oy, p, d):
+    """The two roof plates and the flat plateau, laid flat as they are cut."""
+    L = d["slope"]
+    depth = p["D"]
+    s.text(ox + L, oy - 8, "TOP PLATES (laid flat)", size=4.4, bold=True)
+    # roof plate, left: trapezoid, front edge recedes by V toward the eave
+    s.poly([(ox, oy), (ox + L, oy + p["V"]), (ox + L, oy + p["V"] + d["side_depth"]),
+            (ox, oy + depth)])
+    for i in range(p["SLOTS_PER_SIDE"]):
+        along = L / (p["SLOTS_PER_SIDE"] + 1) * (i + 1)
+        cx = ox + along
+        cy = oy + p["V"] * (along / L) + depth / 2
+        s.line(cx - p["SLOT_W"] / 2, cy, cx + p["SLOT_W"] / 2, cy, w=2.0, colour="#666")
+    s.text(ox + L / 2, oy + depth + 14, f"roof L - slope {L:.0f}", size=3.4)
+    # roof plate, right: mirrored
+    ox2 = ox + L + 26
+    s.poly([(ox2, oy + p["V"]), (ox2 + L, oy), (ox2 + L, oy + depth),
+            (ox2, oy + p["V"] + d["side_depth"])])
+    for i in range(p["SLOTS_PER_SIDE"]):
+        along = L / (p["SLOTS_PER_SIDE"] + 1) * (i + 1)
+        cx = ox2 + L - along                       # mirrored: measure from the ridge end
+        cy = oy + p["V"] * (along / L) + depth / 2
+        s.line(cx - p["SLOT_W"] / 2, cy, cx + p["SLOT_W"] / 2, cy, w=2.0, colour="#666")
+    s.text(ox2 + L / 2, oy + depth + 14, f"roof R - slope {L:.0f}", size=3.4)
+    # plateau plate
+    ox3 = ox
+    oy3 = oy + depth + 26
+    s.poly([(ox3, oy3), (ox3 + p["FLAT"], oy3), (ox3 + p["FLAT"], oy3 + depth),
+            (ox3, oy3 + depth)])
+    s.line(ox3 + p["FLAT"] / 2 - 7, oy3 + depth / 2, ox3 + p["FLAT"] / 2 + 7, oy3 + depth / 2,
+           w=2.0, colour="#000")
+    s.text(ox3 + p["FLAT"] / 2, oy3 + depth + 14,
+           f"plateau {p['FLAT']:.0f} x {depth:.0f}", size=3.4)
+    s.ensure(ox2 + L + 10, oy3 + depth + 22)
 
 
 def main():
-    p = PARAMS
+    p, d = P, None
+    d = derived(p)
     s = Sheet()
-    base = 22 + p["H"] + p["PEAK"] + 58
+    base = 24 + p["H"] + d["peak"] + 54
 
-    front(s, MARGIN, base, p)
-    side(s, MARGIN + p["W"] + GAP + 20, base, p)
-    plan(s, MARGIN, base + 74, p)
+    front(s, MARGIN, base, p, d)
+    side(s, MARGIN + p["W"] + GAP + 16, base, p, d)
+    plan(s, MARGIN, base + 46, p, d)
+    top_plates(s, MARGIN + p["W"] + GAP + 16, base + 46 + 20, p, d)
 
     s.text(s.width / 2, 12,
-           f"Music box enclosure — mockup · {p['T']:g} mm plywood · dimensions in mm",
-           size=5.4, bold=True)
+           f"Music box enclosure - mockup - {p['T']:g} mm plywood - roof {p['ROOF_DEG']:g} deg "
+           f"- mm", size=5.0, bold=True)
 
     out = Path(__file__).with_name("mockup.svg")
     out.write_text(s.svg(), encoding="utf-8")
     print(f"wrote {out}  ({s.width:.0f} x {s.height:.0f} mm)")
+    print(f"  derived: run {d['run']:.1f}, peak {d['peak']:.1f}, slope {d['slope']:.1f}, "
+          f"side depth {d['side_depth']:.1f}")
 
 
 if __name__ == "__main__":

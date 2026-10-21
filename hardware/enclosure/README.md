@@ -22,18 +22,19 @@ component dimensions. `python3 mockup.py` rewrites `mockup.svg` (millimetres, pr
 
 | | value | where it comes from |
 | --- | --- | --- |
-| width `W` | 300 | proportion of the sketch, checked against the hardware layout |
-| end height `H` | 120 | leaves room for driver + board + a felt-lined base |
-| ridge rise `PEAK` | 55 | roof slope ≈ 20°, steep enough that sticks lean without falling |
-| depth `D` | 110 | ESP32 board (≈55 mm) + speaker magnet + wiring service loop |
-| front V `V_DEPTH` | 22 | "slightly angled": ≈ 8° per panel |
+| width `W` | 200 | user's revision (was 300) |
+| end height `H` | 50 | user's revision (was 120) |
+| roof angle | 40° | user's revision; gives a peak of 68.8 and a ridge height of 118.8 |
+| plateau `FLAT` | 36 | flat top where the playing stick plugs in — was a sharp ridge |
+| depth `D` | 90 | user's revision (was 110); side walls are 74 deep, the front ridge adds 16 |
+| front V `V` | 16 | "slightly angled" front |
 | plywood `T` | 4 | thin enough to cut cleanly, thick enough for finger joints |
-| grill `GRILL_D` | 62 | matches a 50–55 mm driver plus a ring of 3 mm holes |
+| grill `GRILL_D` | 44 | the front is only 50 mm tall now, so the grill had to shrink with it |
 | buttons | 4 × ⌀13 | prev, play/pause, next, stop |
 | knob | ⌀22 | KY-040 with a printed cap |
-| roof slots | 4 per side, ⌀14 × 11 deep, 34 pitch | a stick stands in each; the connector is ≈ 12.5 mm wide |
+| roof slots | 3 per side, 11 wide | slots are narrow because the spare sticks stand EDGE-ON: the front sees only their thin side |
 | stick clear height | 46 | leaves room to grab one |
-| back panel | flat, removable | a plain rectangle between the side panels |
+| back panel | flat, removable, 200 wide | same width as the front, tent-shaped top |
 
 ## To confirm before the cut file
 
