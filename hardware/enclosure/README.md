@@ -6,8 +6,11 @@ component dimensions. `python3 mockup.py` rewrites `mockup.svg` (millimetres, pr
 ## The reading of the sketch
 
 - **Front elevation:** flat base, straight ends, and a **tent roof** — ridge at the centre,
-  both slopes falling to the ends. The **comb teeth** stand on those slopes, so spare sticks
-  rest upright in the grooves between them.
+  both slopes falling to the ends.
+- 🔑 **The "teeth" are the USB sticks themselves.** They are not wood: each spare stick plugs
+  into its own slot in the roof and stands **perpendicular to the slope**, which is why the
+  sketch's spikes lean outward. The slot at the ridge is the wired port that plays; the rest
+  are storage. (Correction from the first draft, which drew wooden teeth.)
 - **Plan:** the front face is a **shallow V**, so each front panel is angled toward the viewer
   and they meet at the ridge. That meeting line is the seam in the sketch, and it is where the
   two front pieces interlock.
@@ -28,24 +31,30 @@ component dimensions. `python3 mockup.py` rewrites `mockup.svg` (millimetres, pr
 | grill `GRILL_D` | 62 | matches a 50–55 mm driver plus a ring of 3 mm holes |
 | buttons | 4 × ⌀13 | prev, play/pause, next, stop |
 | knob | ⌀22 | KY-040 with a printed cap |
-| teeth | 4 per side, 9 wide × 38 tall, 22 gaps | a USB stick is ≈ 20 mm wide |
+| roof slots | 4 per side, ⌀14 × 11 deep, 34 pitch | a stick stands in each; the connector is ≈ 12.5 mm wide |
+| stick clear height | 46 | leaves room to grab one |
+| back panel | flat, removable | a plain rectangle between the side panels |
 
 ## To confirm before the cut file
 
 1. **Plywood thickness** — 3, 4 or 6 mm. Every joint dimension follows from it.
 2. **Speaker** — the actual driver diameter and depth; the grill and internal clearance depend
    on it.
-3. **Spare sticks upright** in the comb (as drawn) — or lying flat across the roof?
-4. **How the box opens** — a screwed base plate (simplest, invisible from the front) or a
-   removable back panel (better for servicing the board).
+3. **Are the spare slots mechanical or wired?** A blind 11 mm well simply holds a stick
+   upright (cheap, and only the ridge slot needs a real USB socket wired to the board). Wiring
+   all eight through a hub would be a much bigger job for no benefit — assume mechanical
+   unless told otherwise.
+4. **Slot count** — 4 per side as sketched (8 spare + 1 playing), or should it hold more?
 5. **Size** — 300 × 175 × 110 mm overall; fine for a shelf, but say if it should shrink.
 
 ## What the cut file will contain
 
 Once those are settled, `panels.py` will emit an SVG with every part laid out for cutting:
 
-- two **front panels**, mirrored, with the grill half, button holes and the interlocking seam;
-- two **roof slopes** carrying the comb teeth, with slots for the ridge and the stick opening;
+- two **front panels**, mirrored, each carrying **half the speaker grill** (the circle straddles
+  the seam), the button holes and the interlocking seam;
+- two **roof slopes** with the row of stick slots cut through them, plus a reinforced socket
+  position at the ridge for the wired port;
 - two **side panels**, and the **base** and **back**;
 - **finger joints** everywhere (glued, no fasteners visible), with **kerf compensation**
   (typically 0.1–0.2 mm per side — the cutter's own figure wins);
