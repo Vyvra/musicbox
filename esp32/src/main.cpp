@@ -13,11 +13,37 @@
 #include "resume.h"
 #include "status_led.h"
 #include "usb_stick.h"
+#include "wifi_config.h"
+#include "wifi_link.h"
 
 static ResumeStore store;
 static Controller* box = nullptr;      // exists only while a stick is mounted
 static Controls controls;
 static String rx;
+
+// A stick carrying wifi.txt provisions the box and is otherwise treated like any other:
+// a config stick with music on it does both, which is what an adult would expect.
+static void maybeProvision() {
+  WifiConfig config;
+  String error;
+  if (!readWifiConfig(mbx::usbStick.storage().fs(), "/", config, &error)) {
+    // "no wifi.txt" is the normal case, not a problem worth alarming about.
+    if (error != "no wifi.txt on the stick") {
+      Serial.printf("[wifi] config stick not usable: %s\n", error.c_str());
+      statusLedSet(BoxState::Attention);
+    }
+    return;
+  }
+  if (!saveWifiConfig(config)) {
+    Serial.println("[wifi] could not store credentials");
+    statusLedSet(BoxState::Attention);
+    return;
+  }
+  // Never log the passphrase itself - only whether there is one.
+  Serial.printf("[wifi] stored credentials for '%s' (password %s)\n", config.ssid.c_str(),
+                config.password.length() ? "set" : "empty, open network");
+  wifiStart();
+}
 
 static void startFromStick() {
   box = new Controller(mbx::usbStick.storage().fs(), store);
@@ -71,6 +97,8 @@ static void handleSerial() {
         // commands the Pi has no equivalent for.
         if (rx.equalsIgnoreCase("usb")) {
           usbListing();
+        } else if (rx.equalsIgnoreCase("wifi")) {
+          Serial.println(wifiStatusLine());
         } else if (box) {
           Serial.println(box->command(rx));
         } else {
@@ -103,7 +131,11 @@ void setup() {
     Serial.println("[usb] host started, waiting for a stick");
     statusLedSet(BoxState::Idle);
   }
-  Serial.println("[box] commands: next | prev | playpause | stop | status | volume -12 | usb");
+  // Credentials from an earlier config stick survive a power cycle.
+  if (!wifiStart()) {
+    Serial.println("[wifi] no credentials yet - plug in a stick with wifi.txt");
+  }
+  Serial.println("[box] commands: next | prev | playpause | stop | status | volume -12 | usb | wifi");
 }
 
 void loop() {
@@ -112,6 +144,7 @@ void loop() {
 
   const bool mounted = mbx::usbStick.mounted();
   if (mounted && box == nullptr) {
+    maybeProvision();          // a config stick provisions and may also carry music
     startFromStick();
   } else if (!mounted && box != nullptr) {
     stopStick("stick removed");
@@ -125,5 +158,6 @@ void loop() {
   }
 
   if (box) box->poll();
+  wifiPoll();
   delay(2);
 }

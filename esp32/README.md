@@ -147,6 +147,34 @@ retained NUL padding, the FAT32 root silently lost entries past the first 512 by
 field offsets (0x30/0x32, not 0x28/0x2A) and the extended-BPB signature were all wrong.
 `fsck` caught every one of those; the reader's own tests alone did not.
 
+## Provisioning: the config stick
+
+Wi-Fi credentials arrive on a stick, not through a rebuild — put `wifi.txt` at its root and
+plug it in:
+
+```
+# wifi.txt
+ssid="MyNetwork"
+password="..."
+```
+
+- **Same format as `musicbox.txt`** — `key="value"`, `#` comments, quoting optional, unknown
+  keys ignored — because it is literally the same parser (`readKeyValueFile`). One
+  implementation means a change to the format cannot half-apply.
+- `network=` / `psk=` are accepted as well.
+- Credentials go into **NVS** and are used at boot, so the stick is needed once. Plugging a
+  config stick in again replaces them (newest file wins).
+- A stick may carry **both** `wifi.txt` and music: it provisions *and* plays, which is what an
+  adult would expect. A `wifi.txt` without an `ssid` is rejected **with a reason**, and an
+  ordinary music stick is never mistaken for a config stick.
+- An empty `password=` is valid — an open network.
+- ⚠️ **Security, stated plainly:** the passphrase is plain text on the stick and in NVS —
+  the same exposure as a note stuck to the box. Flash encryption is the real answer, and it is
+  a board-level decision rather than something to pretend to do here.
+
+Cost: enabling the radio takes flash from **23.1 % to 29.9 %** (the whole Wi-Fi stack), which
+is the price of ever playing Spotify. No extra hardware: a config stick is just a stick.
+
 ## What does **not** carry over — and why
 
 ### Spotify

@@ -57,6 +57,18 @@ def needs_lfn(name):
 def build(out_path, kind, size_mb, variant=""):
     files = list(FILES)
     fragmented = (variant == "fragmented")
+    if variant in ("wifi", "wifi_alias", "wifi_nosssid"):
+        if variant == "wifi":
+            wifi = (b'# credentials for the house wifi\n'
+                    b'ssid="MyNetwork"\n'
+                    b'password="correct horse battery staple"\n'
+                    b'unknown_key="ignored"\n')
+        elif variant == "wifi_alias":
+            # the obvious alternative spellings must work too
+            wifi = b'network=fritzbox\npsk=geheim\n'
+        else:
+            wifi = b'password="abc"\n'          # no ssid: must be rejected
+        files = list(FILES) + [("wifi.txt", wifi, False)]
     if variant == "local":
         files = [(n, (b'shuffle="on"\n' if n == "musicbox.txt" else c), f)
                  for (n, c, f) in FILES]

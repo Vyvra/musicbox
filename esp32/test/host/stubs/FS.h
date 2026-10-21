@@ -103,6 +103,10 @@ class String {
   const char* c_str() const { return value_.c_str(); }
   size_t length() const { return value_.size(); }
   bool operator==(const String& other) const { return value_ == other.value_; }
+  bool operator==(const char* other) const {
+    return value_ == (other ? other : "");
+  }
+  bool operator!=(const char* other) const { return !(*this == other); }
   // Arduino's String is concatenable from either side; the firmware relies on both.
   String& operator+=(const char* other) { value_ += (other ? other : ""); return *this; }
   String& operator+=(const String& other) { value_ += other.value_; return *this; }

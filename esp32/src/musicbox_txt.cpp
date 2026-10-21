@@ -1,6 +1,8 @@
 #include "musicbox_txt.h"
 #include "config.h"
 
+#include <functional>
+
 static String trimValue(const String& v) {
   String s = v;
   s.trim();
@@ -63,29 +65,26 @@ static bool isMusicFile(const String& name) {
   return false;
 }
 
-StickCommands readMusicboxTxt(fs::FS& fs, const char* root) {
-  StickCommands out;
+String findStickFile(fs::FS& fs, const char* root, const char* fileName) {
   String dir = String(root);
   if (!dir.endsWith("/")) dir += "/";
 
-  // The Pi accepts any capitalisation of the filename.
-  String path;
+  // Files written on a desktop arrive with whatever capitalisation the user typed.
   File d = fs.open(dir.c_str());
-  if (d && d.isDirectory()) {
-    for (File f = d.openNextFile(); f; f = d.openNextFile()) {
-      String name = f.name();
-      int slash = name.lastIndexOf('/');
-      if (slash >= 0) name = name.substring(slash + 1);
-      if (name.equalsIgnoreCase("musicbox.txt")) {
-        path = dir + name;
-        break;
-      }
-    }
+  if (!d || !d.isDirectory()) return String();
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) {
+    String name = f.name();
+    int slash = name.lastIndexOf('/');
+    if (slash >= 0) name = name.substring(slash + 1);
+    if (name.equalsIgnoreCase(fileName)) return dir + name;
   }
-  if (path.length() == 0) return out;
+  return String();
+}
 
-  File f = fs.open(path.c_str(), FILE_READ);
-  if (!f) return out;
+bool readKeyValueFile(fs::FS& fs, const char* path,
+                      const std::function<void(const String&, const String&)>& fn) {
+  File f = fs.open(path, FILE_READ);
+  if (!f) return false;
 
   while (f.available()) {
     String line = f.readStringUntil('\n');
@@ -95,8 +94,18 @@ StickCommands readMusicboxTxt(fs::FS& fs, const char* root) {
     if (eq < 0) continue;
     String key = line.substring(0, eq);
     key.trim();
-    String value = trimValue(line.substring(eq + 1));
+    fn(key, trimValue(line.substring(eq + 1)));
+  }
+  f.close();
+  return true;
+}
 
+StickCommands readMusicboxTxt(fs::FS& fs, const char* root) {
+  StickCommands out;
+  const String path = findStickFile(fs, root, "musicbox.txt");
+  if (path.length() == 0) return out;
+
+  readKeyValueFile(fs, path.c_str(), [&out](const String& key, const String& value) {
     if (key == "play_spotify_playlist" || key == "play_spotify") {
       out.playlist = value;
     } else if (key == "spotify_audiobook") {
@@ -113,8 +122,7 @@ StickCommands readMusicboxTxt(fs::FS& fs, const char* root) {
       else    { Serial.printf("[musicbox] shuffle %s is not on/off, ignoring\n", value.c_str()); }
     }
     // anything else: ignored, exactly like the Pi, so older boxes keep working
-  }
-  f.close();
+  });
   return out;
 }
 
