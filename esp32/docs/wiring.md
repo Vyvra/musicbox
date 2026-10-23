@@ -74,3 +74,30 @@ Other options, in order of preference:
 
 First test: a **FAT32** stick with one MP3. Expected LED sequence — white blink → blue blink →
 solid blue → **solid green**, and sound from the speaker.
+
+## The stick is not detected at all
+
+Symptom on hardware: LED stays on **blue slow blink** (`waiting`), the console shows
+`usb: no device`, and there is **no `[usb] device attached on the bus` line** — the latter is the
+class-agnostic hotplug callback, so its absence means TinyUSB sees nothing at all. A filesystem
+problem would instead show `device attached`, then an MSC mount, then `cannot mount: is the stick
+FAT32?` and an **amber** LED.
+
+**Cause: the native USB-C port does not source VBUS.** On these dual-USB-C boards that port is
+designed as a *device* port (accepting 5 V from a host), so in host mode the stick gets no power
+and never enumerates. The ESP32-S3 has no Type-C CC logic, so nothing negotiates it either.
+
+Order of checks:
+
+1. **Prove the adapter and stick are fine**: plug the same USB-C adapter + stick into a PC's USB-C
+   port. If the PC sees it, both are good and the board's port is the problem.
+2. **Measure VBUS** on the native port (A4/A9/B4/B9 to GND). 0 V confirms the diagnosis.
+3. **Supply power yourself**, cheapest first:
+   - a **powered USB hub** between the board and the stick (the hub provides VBUS; D+/D- still run
+     to the board) — quickest way to prove host mode works;
+   - a **USB-C OTG adapter with a power input** (PD pass-through), which is tidier inside an
+     enclosure than a hub;
+   - feeding 5 V directly onto the port's VBUS pad — last resort, needs fine soldering.
+
+Until the stick is powered this way, host-mode firmware cannot be exercised beyond
+`host started`.

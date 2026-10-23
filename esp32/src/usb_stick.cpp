@@ -85,8 +85,17 @@ String UsbStick::describe() const {
 
 }  // namespace mbx
 
-// TinyUSB host callbacks. Defined here (weak defaults exist in the stack) so the
-// filesystem layer gets told exactly when a stick arrives and leaves.
+// Class-agnostic hotplug: fires for ANY device, before the MSC driver claims it. This is what
+// separates "nothing on the bus" (no VBUS, bad adapter) from "device there but not storage".
+extern "C" void tuh_mount_cb(uint8_t dev_addr) {
+  Serial.printf("[usb] device attached on the bus (addr %u)\n", dev_addr);
+}
+
+extern "C" void tuh_umount_cb(uint8_t dev_addr) {
+  Serial.printf("[usb] device detached (addr %u)\n", dev_addr);
+}
+
+// MSC callbacks: only fire once the mass-storage interface is recognised.
 extern "C" void tuh_msc_mount_cb(uint8_t dev_addr) { mbx::usbStick.handleMount(dev_addr); }
 extern "C" void tuh_msc_umount_cb(uint8_t dev_addr) {
   (void)dev_addr;
