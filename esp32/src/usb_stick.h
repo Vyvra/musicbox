@@ -25,6 +25,11 @@ class UsbStick {
   const String& problem() const { return problem_; }
   String describe() const;
 
+  // Diagnostics: what the TinyUSB host stack thinks about its own port. "Initialised" only
+  // means tusb_init() succeeded; "port active" means the PHY is actually driving the bus.
+  bool hostInited() const;
+  bool portActive() const;
+
   // Called from the TinyUSB callbacks below.
   void handleMount(uint8_t devAddr);
   void handleUnmount();

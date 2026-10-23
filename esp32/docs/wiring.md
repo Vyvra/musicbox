@@ -87,6 +87,15 @@ FAT32?` and an **amber** LED.
 designed as a *device* port (accepting 5 V from a host), so in host mode the stick gets no power
 and never enumerates. The ESP32-S3 has no Type-C CC logic, so nothing negotiates it either.
 
+**Confirmed on hardware (2026-10-23):** the host stack reports `inited=1 active=1` — TinyUSB is
+initialised and the PHY is driving the bus — yet no `device attached` event ever fires. So host
+mode works on this board, and the fault is electrically downstream of the chip. That narrows it to
+two things: no VBUS reaching the device, or a **charge-only C-to-A adapter**.
+
+⚠️ Testing the stick directly in a PC's USB-A port does **not** test the adapter. Put the *same
+adapter* in a PC USB-C port with the stick in it; if the PC cannot see it, the adapter has no data
+lines and no amount of power on the board will help.
+
 Order of checks:
 
 1. **Prove the adapter and stick are fine**: plug the same USB-C adapter + stick into a PC's USB-C

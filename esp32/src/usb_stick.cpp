@@ -61,6 +61,10 @@ void UsbStick::handleMount(uint8_t devAddr) {
                 (unsigned)storage_.volume().clusterBytes());
 }
 
+bool UsbStick::hostInited() const { return tuh_inited(); }
+
+bool UsbStick::portActive() const { return tuh_rhport_is_active(0); }
+
 void UsbStick::handleUnmount() {
   mounted_ = false;
   devAddr_ = 0;
