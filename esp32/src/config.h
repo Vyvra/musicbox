@@ -33,10 +33,14 @@
 #define PIN_STATUS_LED     48
 
 // ---- buttons / knob (active low, internal pull-ups) --------------------------
-#define PIN_BTN_PLAYPAUSE 1
-#define PIN_BTN_NEXT      2
-#define PIN_BTN_PREV      43
-#define PIN_BTN_STOP      44
+// ⚠️ GPIO 43/44 are UART0 TX/RX on the ESP32-S3 - the pins the CH343 console uses. Driving
+// them as inputs kills the serial link mid-print (found the hard way: the boot log stopped at
+// "controls"). 19/20 are native USB, 26-32 are flash/PSRAM, 0/3/45/46 are strapping pins, and
+// 48 is the status LED, so all of those are avoided too.
+#define PIN_BTN_PLAYPAUSE 38
+#define PIN_BTN_NEXT      39
+#define PIN_BTN_PREV      40
+#define PIN_BTN_STOP      41
 #define PIN_ENC_A         11
 #define PIN_ENC_B         12
 #define PIN_ENC_SW        13
@@ -52,6 +56,9 @@
 #define VOLUME_MAX_DB          0.0f
 #define VOLUME_STEPS          100     // resolution of the software volume
 
+// Bring-up heartbeat on the serial console: proves loop() is running and shows whether
+// the UART is receiving. Set to 0 to silence it once the box is in use.
+#define HEARTBEAT_MS        10000UL
 #define SAVE_INTERVAL_MS   60000UL    // checkpoint position while playing
 #define RESUME_MIN_SECONDS     0.5f   // below this, start from the beginning
 #define TRACK_START_GRACE_MS 1500UL   // ignore "not running" right after starting

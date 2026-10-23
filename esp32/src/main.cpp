@@ -31,6 +31,7 @@ static ResumeStore store;
 static Controller* box = nullptr;      // exists only while a stick is mounted
 static Controls controls;
 static String rx;
+static uint32_t rx_bytes = 0;   // diagnostic: proves the UART is receiving
 
 // A stick carrying wifi.txt provisions the box and is otherwise treated like any other:
 // a config stick with music on it does both, which is what an adult would expect.
@@ -149,6 +150,7 @@ static void handleSerial() {
       }
     } else if (rx.length() < 120) {
       rx += c;
+      rx_bytes++;
     }
   }
 }
@@ -158,28 +160,55 @@ void setup() {
   unsigned long started = millis();
   while (!Serial && millis() - started < 1500) delay(10);   // USB CDC: let the host attach
 
+  // Every step is announced and flushed: if the board dies mid-init, the last line printed says
+  // where. Serial.flush() matters here - it waits for the UART to drain, so a line is not lost
+  // in the buffer when the crash happens.
+  auto step = [](const char* what) {
+    Serial.printf("[step] %s\n", what);
+    Serial.flush();
+  };
+
   Serial.println();
   Serial.println("[box] music box - ESP32-S3");
-  statusLedBegin();
-  setLed(LedState::Boot);
-  store.begin();
-  controls.begin();
+  Serial.flush();
 
-  if (!mbx::usbStick.begin()) {
+  step("led begin");
+  statusLedBegin();
+  step("boot colour");
+  setLed(LedState::Boot);
+  step("resume store");
+  store.begin();
+  step("controls");
+  controls.begin();
+  step("usb host");
+  bool usbOk = mbx::usbStick.begin();
+  step(usbOk ? "usb host started" : "usb host FAILED");
+  if (!usbOk) {
     Serial.println("[usb] host did not start");
     setLed(LedState::NoUsbHost);
   } else {
     Serial.println("[usb] host started, waiting for a stick");
     setLed(LedState::Waiting);
   }
-  // Credentials from an earlier config stick survive a power cycle.
+  step("wifi");
   if (!wifiStart()) {
     Serial.println("[wifi] no credentials yet - plug in a stick with wifi.txt");
   }
   Serial.println("[box] commands: next | prev | playpause | stop | status | volume -12 | usb | wifi");
+  Serial.flush();
+  step("setup complete");
 }
 
 void loop() {
+  // Heartbeat: proves loop() keeps running. If this stops after "setup complete", something in
+  // the loop is blocking; if it runs but rx_bytes stays 0, the UART is not receiving.
+  static uint32_t last_beat = 0;
+  if (HEARTBEAT_MS > 0 && millis() - last_beat > HEARTBEAT_MS) {
+    last_beat = millis();
+    Serial.printf("[hb] alive %lus  rx %lu bytes  usb %s\n", (unsigned long)(millis() / 1000),
+                  (unsigned long)rx_bytes, mbx::usbStick.describe().c_str());
+    Serial.flush();
+  }
   handleSerial();
   mbx::usbStick.poll();          // pumps enumeration and the MSC transfer queue
 
