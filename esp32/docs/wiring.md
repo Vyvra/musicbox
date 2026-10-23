@@ -120,3 +120,24 @@ Order of checks:
 
 Until the stick is powered this way, host-mode firmware cannot be exercised beyond
 `host started`.
+
+## Testing the amp without any firmware features
+
+`test/speaker-check` drives the MAX98357A directly over I2S with no library and no filesystem, so
+a failure there can only be wiring, amp or speaker.
+
+⚠️ **Use a square wave, not a sine.** A pure 440 Hz sine through a small driver radiates almost
+nothing at the levels that are safe on 3V3 - the only audible part is the transient when the I2S
+clock starts. That presents as *short chirps at every reconfiguration*, which looks exactly like a
+data problem and is not one. A 300 Hz square wave carries strong harmonics and is unmistakable.
+
+| what you hear | meaning |
+| --- | --- |
+| steady buzz in rhythm | amp, speaker and wiring are all good |
+| nothing | amp not powered, or `SD_MODE` strapped low (shutdown) |
+| click only at each start | clock reaches the amp but the data line does not |
+| buzz but faint | working, but starved of headroom on 3V3 - move VIN to a 5 V pin |
+
+**Verified on hardware (2026-10-23):** I2S on BCLK 4 / LRC 5 / DIN 6 into a MAX98357A fed from
+**3V3** produces a clear buzz, with no resets - so the amp's peaks are within what the 3V3 regulator
+supplies at this level.
