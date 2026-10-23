@@ -21,6 +21,12 @@
 #include "cspot_boot.h"
 #endif
 
+// Keep the LED and the log in step: during bring-up the LED is often the only output.
+static void setLed(LedState state) {
+  statusLedSet(state);
+  Serial.printf("[led] %s\n", statusLedName(state));
+}
+
 static ResumeStore store;
 static Controller* box = nullptr;      // exists only while a stick is mounted
 static Controls controls;
@@ -35,13 +41,13 @@ static void maybeProvision() {
     // "no wifi.txt" is the normal case, not a problem worth alarming about.
     if (error != "no wifi.txt on the stick") {
       Serial.printf("[wifi] config stick not usable: %s\n", error.c_str());
-      statusLedSet(BoxState::Attention);
+      setLed(LedState::Error);
     }
     return;
   }
   if (!saveWifiConfig(config)) {
     Serial.println("[wifi] could not store credentials");
-    statusLedSet(BoxState::Attention);
+    setLed(LedState::NoMusic);
     return;
   }
   // Never log the passphrase itself - only whether there is one.
@@ -86,10 +92,10 @@ static void startFromStick() {
     // Keep the object rather than dropping it: `status` can then explain *why* nothing
     // plays (an exFAT stick, a bad musicbox.txt) instead of looking like an empty port.
     Serial.printf("[box] cannot play this stick: %s\n", box->statusLine().c_str());
-    statusLedSet(BoxState::Attention);
+    setLed(LedState::NoMusic);
     return;
   }
-  statusLedSet(BoxState::Playing);
+  setLed(LedState::Playing);
   Serial.println("[box] " + box->statusLine());
 }
 
@@ -155,16 +161,16 @@ void setup() {
   Serial.println();
   Serial.println("[box] music box - ESP32-S3");
   statusLedBegin();
-  statusLedSet(BoxState::Booting);
+  setLed(LedState::Boot);
   store.begin();
   controls.begin();
 
   if (!mbx::usbStick.begin()) {
     Serial.println("[usb] host did not start");
-    statusLedSet(BoxState::Attention);
+    setLed(LedState::NoUsbHost);
   } else {
     Serial.println("[usb] host started, waiting for a stick");
-    statusLedSet(BoxState::Idle);
+    setLed(LedState::Waiting);
   }
   // Credentials from an earlier config stick survive a power cycle.
   if (!wifiStart()) {
@@ -179,11 +185,12 @@ void loop() {
 
   const bool mounted = mbx::usbStick.mounted();
   if (mounted && box == nullptr) {
+    setLed(LedState::Mounted);
     maybeProvision();          // a config stick provisions and may also carry music
     startFromStick();
   } else if (!mounted && box != nullptr) {
     stopStick("stick removed");
-    statusLedSet(BoxState::Idle);
+    setLed(LedState::Waiting);
     Serial.println("[box] stick removed");
   }
 
@@ -193,6 +200,7 @@ void loop() {
   }
 
   if (box) box->poll();
+  statusLedPoll();
   wifiPoll();
   maybeBootSpotify();
   delay(2);

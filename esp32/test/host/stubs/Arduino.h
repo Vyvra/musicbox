@@ -27,6 +27,12 @@ struct SerialShim {
 
 extern SerialShim Serial;
 
+// WS2812 writes are recorded so the diagnostic LED logic can be tested without hardware.
+extern int mbx_led_r, mbx_led_g, mbx_led_b, mbx_led_writes;
+static inline void rgbLedWrite(uint8_t, uint8_t r, uint8_t g, uint8_t b) {
+  mbx_led_r = r; mbx_led_g = g; mbx_led_b = b; mbx_led_writes++;
+}
+
 // Deterministic clock: tests advance it explicitly.
 extern uint32_t mbx_test_millis;
 static inline uint32_t millis() { return mbx_test_millis; }

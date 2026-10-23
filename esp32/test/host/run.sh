@@ -38,6 +38,8 @@ g++ -std=c++17 -O2 -Wall -Wextra -I stubs -I ../../src \
     ../../src/storage.cpp ../../src/resume.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
 g++ -std=c++17 -O2 -Wall -Wextra -o "$TMP/test_fragmented" test_fragmented.cpp \
     ../../src/fat_reader.cpp
+g++ -std=c++17 -O2 -Wall -Wextra -I . -I stubs -I ../../src -o "$TMP/test_led" \
+    test_led.cpp ../../src/status_led.cpp
 g++ -std=c++17 -O2 -Wall -Wextra -I . -I stubs -I ../../src -o "$TMP/test_provisioning" \
     test_provisioning.cpp ../../src/wifi_config.cpp ../../src/spotify_blob.cpp \
     ../../src/musicbox_txt.cpp ../../src/usb_fs.cpp ../../src/fat_reader.cpp
@@ -58,6 +60,10 @@ done
 echo
 echo "== fragmented file: cluster chain that jumps over a hole"
 "$TMP/test_fragmented" "$TMP/fat16_fragmented.img" || status=1
+
+echo
+echo "== diagnostic LED: colours and blink patterns"
+"$TMP/test_led" || status=1
 
 echo
 echo "== provisioning: wifi.txt parsing and the NVS round trip"
