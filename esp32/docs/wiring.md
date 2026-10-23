@@ -33,6 +33,27 @@ Two reliable ways to identify it:
 
 Reading 0 V on both means the pin is a GPIO, not a rail — do not connect the amp there.
 
+### What about the pin marked "5Vin"?
+
+`5Vin` is the **input** to the on-board 3.3 V regulator: its purpose is powering the *board* from
+an external 5 V supply. It is not intended as a peripheral supply.
+
+It sits on the same 5 V rail though, so in practice it usually works as a source. Two things
+decide it:
+
+- **Measure it** with USB connected: `5Vin` to `GND`.
+  - **~4.8–5.0 V** → it is the live 5 V rail on this board; the amp can take VIN from it.
+  - **~0 V** → it is isolated by a diode; use the ordinary `5V` pin or fall back to 3V3.
+- **Never drive `5Vin` and USB at the same time** unless the board is documented for it. Feeding
+  an external 5 V into that pin while USB is plugged in back-feeds the host port.
+
+If you power the board *from* `5Vin` (bench supply, battery), then feed the amp from **that same
+supply node** — one source, one ground, nothing to fight.
+
+⚠️ Wherever the amp's VIN comes from, put a **100–470 µF electrolytic across VIN/GND at the amp**.
+Class-D current spikes on a long dupont wire brown out the board in a way that looks like a
+software crash. It is the cheapest reliability fix on this build.
+
 ## If you cannot find 5 V: use 3V3
 
 The MAX98357A accepts **2.5–5.5 V**, so **3V3 works** — you simply get about a third of the
