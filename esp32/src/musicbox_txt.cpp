@@ -72,8 +72,9 @@ String findStickFile(fs::FS& fs, const char* root, const char* fileName) {
   // Files written on a desktop arrive with whatever capitalisation the user typed.
   File d = fs.open(dir.c_str());
   if (!d || !d.isDirectory()) return String();
-  for (File f = d.openNextFile(); f; f = d.openNextFile()) {
-    String name = f.name();
+  // Names only: building a File for every entry goes through the FS adapter's FileImpl path, which
+  // aborted on hardware. The name iterator is enough to find a file.
+  for (String name = d.getNextFileName(); name.length(); name = d.getNextFileName()) {
     int slash = name.lastIndexOf('/');
     if (slash >= 0) name = name.substring(slash + 1);
     if (name.equalsIgnoreCase(fileName)) return dir + name;

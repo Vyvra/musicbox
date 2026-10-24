@@ -33,7 +33,9 @@ class FatFileImpl : public FileImpl {
     if (isDir_) {
       // Listed up front: the interface is an iterator with no notion of "reopen", and a
       // directory here is small enough that this costs nothing.
-      volume_->list(path_, children_);
+      const bool listed = volume_->list(path_, children_);
+      Serial.printf("[fs] dir '%s' list=%d children=%u\n", path_.c_str(), (int)listed,
+                    (unsigned)children_.size());
     }
   }
 
@@ -122,7 +124,11 @@ class FatFSImpl : public FSImpl {
   explicit FatFSImpl(const fat::Volume* volume) : volume_(volume) {}
 
   FileImplPtr open(const char* path, const char* mode, const bool create) override {
-    if (!volume_ || !volume_->mounted() || path == nullptr) return FileImplPtr();
+    Serial.printf("[fs] open('%s')\n", path ? path : "(null)");
+    if (!volume_ || !volume_->mounted() || path == nullptr) {
+      Serial.println("[fs]   refused: not mounted / null path");
+      return FileImplPtr();
+    }
     // Anything that could modify the stick is refused outright rather than half-honoured.
     const char* m = mode ? mode : "r";
     if (create || strchr(m, 'w') || strchr(m, 'a') || strchr(m, '+')) {
@@ -130,9 +136,18 @@ class FatFSImpl : public FSImpl {
     }
 
     fat::Entry entry;
-    if (!volume_->stat(path, entry)) return FileImplPtr();
+    if (!volume_->stat(path, entry)) {
+      Serial.println("[fs]   stat failed");
+      return FileImplPtr();
+    }
+    Serial.printf("[fs]   stat ok: %s dir=%d size=%u\n", entry.name.c_str(), (int)entry.isDir,
+                  (unsigned)entry.size);
     std::string p(path);
-    return std::make_shared<FatFileImpl>(volume_, entry, p, baseName(p), entry.isDir);
+    Serial.printf("[fs]   heap=%u min=%u before make_shared\n", (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMinFreeHeap());
+    FileImplPtr out = std::make_shared<FatFileImpl>(volume_, entry, p, baseName(p), entry.isDir);
+    Serial.printf("[fs]   created ok=%d heap=%u\n", (int)(bool)out, (unsigned)ESP.getFreeHeap());
+    return out;
   }
 
   bool exists(const char* path) override {
