@@ -97,3 +97,15 @@ TinyUSB is the only stack that enumerates here, so the storage path has to be Ti
 is its refusal to read. The next experiment is narrow: call `USBHostMSC.readBlocks()` (the core's
 driver, which contains the endpoint-readiness wait and BOT recovery) from a dedicated task rather than
 from the loop, and instrument `tuh_msc_ready()` around each transfer to see why it reports not-ready.
+
+## Working configuration (verified)
+
+The box plays MP3s from the USB stick with: Arduino's TinyUSB host, `USBHostMSC.readBlocks()` for all
+block I/O, partition-table support in `fat_reader`, `-DARDUINO_LOOP_STACK_SIZE=24576`, and a 16-block
+(8 kB) bounce buffer per transfer.
+
+⚠️ **Do not judge playback a few seconds after connecting to the serial port.** Opening `/dev/ttyACM0`
+asserts DTR/RTS and resets the board; mount, FAT parse and the decoder's header scan then take several
+seconds (the library logs `stream ready` only once it has read the ID3 tag and first frames). On this
+stick the position reads 0 for the first ~10 s and then advances normally. Confirmed: `local: track 0,
+17s` → `26s` eight seconds later.
