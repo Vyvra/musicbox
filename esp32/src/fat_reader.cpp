@@ -37,13 +37,54 @@ static bool readBytes(const BlockReader& reader, uint32_t blockSize, uint64_t of
 // ------------------------------------------------------------------ mount
 
 bool Volume::mount(const BlockReader& reader, uint32_t blockSize) {
-  reader_ = reader;
+  base_ = reader;
   blockSize_ = blockSize;
   mounted_ = false;
+  startLba_ = 0;
+  reader_ = base_;
 
   uint8_t boot[512];
-  if (!reader_(0, boot, 1)) return false;
-  if (boot[510] != 0x55 || boot[511] != 0xAA) return false;   // not a boot sector
+  if (!base_(0, boot, 1)) return false;
+
+  if (!parseBootSector(boot)) {
+    // Not a filesystem at sector 0, but it may be an MBR whose partition holds one. This is the
+    // normal layout for a partitioned stick, and reading only sector 0 made such a stick look
+    // unformatted: its first sector is a partition table, so every BPB field reads as zero.
+    if (boot[510] != 0x55 || boot[511] != 0xAA) return false;   // neither FAT nor MBR
+    bool found = false;
+    for (int i = 0; i < 4 && !found; i++) {
+      const uint8_t* entry = boot + 0x1BE + i * 16;
+      const uint8_t type = entry[4];
+      const uint32_t lba = le32(entry + 8);
+      const uint32_t count = le32(entry + 12);
+      // 0x00 = empty slot; 0xEE = GPT protective entry (the real table is elsewhere).
+      if (type == 0x00 || type == 0xEE || lba == 0 || count == 0) continue;
+      if (!base_(lba, boot, 1)) continue;
+      if (!parseBootSector(boot)) continue;
+      startLba_ = lba;
+      found = true;
+    }
+    if (!found) {
+      type_ = "none";
+      return false;
+    }
+  }
+
+  // Every sector number above is volume-relative; the offset is applied here, once.
+  if (startLba_ != 0) {
+    reader_ = [b = base_, off = startLba_](uint32_t lba, uint8_t* buffer, uint32_t count) {
+      return b(lba + off, buffer, count);
+    };
+  }
+
+  mounted_ = true;
+  return true;
+}
+
+// Parses a FAT boot sector that is already in `boot`. Returns false for anything that is not one,
+// which is how an MBR partition table is told apart from a filesystem.
+bool Volume::parseBootSector(const uint8_t* boot) {
+  if (boot[510] != 0x55 || boot[511] != 0xAA) return false;
 
   bytesPerSector_    = le16(boot + 0x0B);
   sectorsPerCluster_ = boot[0x0D];
@@ -87,8 +128,6 @@ bool Volume::mount(const BlockReader& reader, uint32_t blockSize) {
   label[11] = '\0';
   for (int i = 10; i >= 0 && label[i] == ' '; i--) label[i] = '\0';
   label_ = label;
-
-  mounted_ = true;
   return true;
 }
 

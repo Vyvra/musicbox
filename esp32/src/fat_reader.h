@@ -37,6 +37,7 @@ class Volume {
   bool mounted() const { return mounted_; }
 
   const char* type() const { return type_; }        // "FAT16" / "FAT32"
+  uint32_t volumeStartLba() const { return startLba_; }  // 0 for a superfloppy
   std::string label() const { return label_; }
   uint32_t    clusterBytes() const { return clusterBytes_; }
 
@@ -55,6 +56,7 @@ class Volume {
                   uint32_t length) const;
 
  private:
+  bool parseBootSector(const uint8_t* boot);
   bool readFatEntry(uint32_t cluster, uint32_t& next) const;
   bool readCluster(uint32_t cluster, uint8_t* buffer) const;
   bool readDirCluster(uint32_t cluster, std::vector<Entry>& out) const;
@@ -65,7 +67,9 @@ class Volume {
                       std::vector<Entry>& out) const;
   bool isEndOfChain(uint32_t cluster) const;
 
-  BlockReader reader_;
+  BlockReader base_;                 // the caller's reader, unoffset
+  BlockReader reader_;               // base_ plus the partition offset
+  uint32_t    startLba_ = 0;         // first sector of the volume
   bool        mounted_ = false;
   uint32_t    blockSize_ = 512;
 

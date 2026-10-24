@@ -139,6 +139,10 @@ static void handleSerial() {
         // commands the Pi has no equivalent for.
         if (rx.equalsIgnoreCase("usb")) {
           usbListing();
+        } else if (rx.startsWith("raw")) {
+          // "raw" or "raw 2048" - read one block and report whether the bytes actually arrived.
+          const uint32_t lba = rx.length() > 3 ? (uint32_t)rx.substring(4).toInt() : 0;
+          Serial.println(mbx::usbStick.debugRawRead(lba));
         } else if (rx.equalsIgnoreCase("wifi")) {
           Serial.println(wifiStatusLine());
         } else if (box) {

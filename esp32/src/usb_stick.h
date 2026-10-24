@@ -24,6 +24,8 @@ class UsbStick {
   uint32_t blockBytes() const { return blockBytes_; }
   const String& problem() const { return problem_; }
   String describe() const;
+  // Poison a buffer, read one block, and report what changed: proof of whether data arrives.
+  String debugRawRead(uint32_t lba);
 
   // Diagnostics: what the TinyUSB host stack thinks about its own port. "Initialised" only
   // means tusb_init() succeeded; "port active" means the PHY is actually driving the bus.

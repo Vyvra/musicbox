@@ -16,6 +16,8 @@ bool UsbStick::begin() {
   // DWC2/PHY reset (the ROM leaves the controller in persist/USJ state after a USB download, so a
   // bare tuh_init() never enumerates), starts a background worker task, and - crucially - documents
   // that Serial/FS work must not happen inside TinyUSB callbacks because it can Store-fault.
+  // NOTE: pinning the worker (USBHost.setCore) was tried and rejected: core 0 overflows IDLE0's
+  // ~1.5 kB stack, core 1 trips the interrupt watchdog. Both are the transfer path, not scheduling.
   if (!USBHost.begin()) {
     started_ = false;
     problem_ = "USB host controller failed to start";
@@ -85,7 +87,7 @@ bool UsbStick::probe() {
     // DWC2 DMA engine, and a stack array is only byte-aligned: the transfer then completes "success
     // fully" while the data lands somewhere else, which is exactly what an all-zero boot sector with
     // a stray signature looks like. Chunking also bounds the bounce buffer's size.
-    static uint8_t __attribute__((aligned(32))) bounce[512 * 8];
+    static uint8_t __attribute__((aligned(32))) bounce[512 * 1];
     const uint32_t chunkBlocks = sizeof(bounce) / 512;
     uint32_t done = 0;
     while (done < count) {
@@ -151,7 +153,7 @@ void UsbStick::describeFailure() {
     // DWC2 DMA engine, and a stack array is only byte-aligned: the transfer then completes "success
     // fully" while the data lands somewhere else, which is exactly what an all-zero boot sector with
     // a stray signature looks like. Chunking also bounds the bounce buffer's size.
-    static uint8_t __attribute__((aligned(32))) bounce[512 * 8];
+    static uint8_t __attribute__((aligned(32))) bounce[512 * 1];
     const uint32_t chunkBlocks = sizeof(bounce) / 512;
     uint32_t done = 0;
     while (done < count) {
@@ -199,6 +201,25 @@ void UsbStick::handleUnmount() {
   blocks_ = 0;
   storage_.unmount();
   eventDetach_ = true;  // reported by poll()
+}
+
+String UsbStick::debugRawRead(uint32_t lba) {
+  // Poison the buffer first: a "successful" read that leaves 0xA5 everywhere proves the data never
+  // arrived, which is different from a read that fails outright.
+  uint8_t buf[512];
+  memset(buf, 0xA5, sizeof buf);
+  const bool ok = USBHostMSC.readBlocks(lba, buf, 1);
+  int changed = 0;
+  for (size_t i = 0; i < sizeof buf; i++) {
+    if (buf[i] != 0xA5) changed++;
+  }
+  char hex[3 * 16 + 1] = {};
+  for (int i = 0; i < 16; i++) snprintf(hex + i * 3, 4, "%02X ", buf[i]);
+  char out[200];
+  snprintf(out, sizeof out, "raw lba=%u ok=%d changed=%d/%u blockSize=%u dev=%u hex=%s",
+           (unsigned)lba, (int)ok, changed, (unsigned)sizeof buf,
+           (unsigned)USBHostMSC.blockSize(), (unsigned)USBHostMSC.devAddr(), hex);
+  return String(out);
 }
 
 String UsbStick::describe() const {
