@@ -35,6 +35,7 @@ bool LocalPlayer::begin(int startIndex, float startSeconds, float volumeDb) {
   // stop playback.
   Audio::audio_info_callback = [](Audio::msg_t m) {
     if (m.e == Audio::evt_eof) g_eof = true;
+    if (m.msg) Serial.printf("[audio] %s\n", m.msg);   // the library's own diagnostics
   };
 
   index_ = startIndex;
@@ -56,8 +57,10 @@ void LocalPlayer::playCurrent(float startSeconds) {
   // -1 start byte = from the beginning; seeking to a time is a separate call.
   if (!audio.connecttoFS(fs_, path.c_str(), -1)) {
     problem_ = "cannot open " + path;
+    Serial.printf("[local] connecttoFS FAILED for %s\n", path.c_str());
     return;
   }
+  Serial.printf("[local] opened %s\n", path.c_str());
   if (startSeconds > RESUME_MIN_SECONDS) {
     uint16_t sec = (uint16_t)startSeconds;
     if (!audio.setAudioPlayTime(sec)) {
