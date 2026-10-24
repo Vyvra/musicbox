@@ -46,7 +46,7 @@
 #define PIN_ENC_SW        13
 
 // ---- defaults (same values as the Pi's /etc/musicbox/config) -----------------
-#define DEFAULT_VOLUME_DB    -24.0f
+#define DEFAULT_VOLUME_DB     0.0f    // full scale: the amp on 3V3 has little headroom to spare
 #define AUDIOBOOK_VOLUME_DB  -15.0f
 // Playlists. The Pi leaves SPOTIFY_VOLUME_DB empty and falls back to VOLUME_DB; -24
 // is that same value, stated explicitly here.
