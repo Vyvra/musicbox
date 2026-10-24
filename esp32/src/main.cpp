@@ -256,5 +256,7 @@ void loop() {
   statusLedPoll();
   wifiPoll();
   maybeBootSpotify();
-  delay(2);
+  // Audio is fed by audio.loop() from this task, so the loop must come round often: a 2 ms delay
+  // here is a 2 ms window in which the decoder cannot be refilled.
+  delay(1);
 }
