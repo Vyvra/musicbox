@@ -1,57 +1,50 @@
-// USB mass storage through ESP-IDF's own USB host stack.
+// USB mass storage through ESP-IDF's usb_host, using Espressif's own MSC driver.
 //
-// Arduino's TinyUSB host enumerates the stick but cannot sustain block reads on this board: repeated
-// transfers trip IDLE0's stack canary on core 0 and the interrupt watchdog on core 1, whichever core
-// the worker is pinned to. ESP-IDF's usb_host is a different implementation - it was measured holding
-// the device stably - so the block layer is built on it instead.
+// Arduino's TinyUSB host enumerates the stick but cannot sustain block reads on this board (IDLE0
+// stack canary on core 0, interrupt watchdog on core 1). Hand-rolling BOT on top of usb_host got
+// further - the device opened at full speed - but this particular stick never hands over a
+// configuration descriptor, which is precisely the class-specific negotiation the official driver
+// already implements (descriptors, SET_CONFIGURATION, endpoint discovery, BOT, sense/retry). So the
+// driver is vendored into lib/usb_host_msc and used as-is.
 //
-// This is a minimal Bulk-Only Transport (BOT) client: enough SCSI to ask for capacity and read
-// sectors. It is read-only by design; the box must never write to a child's stick.
+// Read-only from this project's point of view: only the READ(10) path is used.
 #pragma once
 #include <cstdint>
-
-struct usb_transfer_s;
+#include <esp_err.h>
 
 namespace mbx {
 
 class IdfMsc {
  public:
-  bool begin();     // install the host library and register a synchronous client
-  void poll();      // pump events, detect attach/detach (cheap; safe to call every loop)
+  bool begin();   // install the host library and the MSC driver
+  void poll();    // act on connect/disconnect events (cheap)
 
   bool mounted() const { return mounted_; }
   uint32_t blockCount() const { return blockCount_; }
   uint32_t blockSize() const { return blockSize_; }
   const char* problem() const { return problem_; }
 
-  // Blocking read. Pumps the host client internally, so it must be called from the same task as
-  // poll() - one task owns the client.
   bool readBlocks(uint32_t lba, void* buffer, uint32_t blocks);
+  bool rawRead(uint32_t lba);   // diagnostic: one block, report whether bytes arrived
+  int lastChanged() const { return lastChanged_; }
 
  private:
-  bool tryAttachAny();
-  bool attachWith(void* dev, uint8_t addr);   // usb_device_handle_t
-  bool setConfiguration(void* dev, uint8_t configValue);
-  bool fetchConfigDescriptor(void* dev, uint8_t* out, uint16_t length);
-  void detach();
-  bool scsiInquirySizeOf(uint32_t lba, uint32_t blocks, void* buffer);  // READ(10)
-  bool readCapacity();
-  bool controlRequest(uint8_t requestType, uint8_t request, uint16_t value, uint16_t index,
-                      void* data, uint16_t length);
-  bool transferWait(usb_transfer_s* transfer, int timeoutMs);
+  friend void mscEventTrampoline(const void* event, void* arg);
+  void onEvent(int event, uint8_t address);
+  bool tryInstall(uint8_t addr);
+  esp_err_t lastProbeErr() const { return lastErr_; }
 
-  bool hostInstalled_ = false;
-  bool mounted_ = false;
-  void* client_ = nullptr;     // usb_host_client_handle_t
-  uint8_t devAddr_ = 0;
-  volatile uint8_t newDev_ = 0;   // set from the client event callback
-  uint8_t itfNum_ = 0;
-  uint8_t epIn_ = 0;
-  uint8_t epOut_ = 0;
+  bool installed_ = false;
+  volatile bool mounted_ = false;
+  volatile uint8_t pendingAddr_ = 0;
+  volatile bool detachPending_ = false;
+  void* device_ = nullptr;      // msc_host_device_handle_t
   uint32_t blockCount_ = 0;
   uint32_t blockSize_ = 512;
-  uint32_t tag_ = 1;
   const char* problem_ = "not started";
+  uint8_t lastData_[16] = {};   // filled by rawRead for reporting
+  int lastChanged_ = -1;
+  esp_err_t lastErr_ = ESP_OK;
 };
 
 extern IdfMsc idfMsc;

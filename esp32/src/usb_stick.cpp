@@ -199,21 +199,12 @@ void UsbStick::handleUnmount() {
 }
 
 String UsbStick::debugRawRead(uint32_t lba) {
-  // Poison the buffer first: a "successful" read that leaves 0xA5 everywhere proves the data never
-  // arrived, which is different from a read that fails outright.
-  uint8_t buf[512];
-  memset(buf, 0xA5, sizeof buf);
-  const bool ok = idfMsc.readBlocks(lba, buf, 1);
-  int changed = 0;
-  for (size_t i = 0; i < sizeof buf; i++) {
-    if (buf[i] != 0xA5) changed++;
-  }
-  char hex[3 * 16 + 1] = {};
-  for (int i = 0; i < 16; i++) snprintf(hex + i * 3, 4, "%02X ", buf[i]);
+  // Read one block through the driver and report whether the bytes actually arrived.
+  const bool ok = idfMsc.rawRead(lba);
   char out[200];
-  snprintf(out, sizeof out, "raw lba=%u ok=%d changed=%d/%u blockSize=%u dev=%u hex=%s",
-           (unsigned)lba, (int)ok, changed, (unsigned)sizeof buf,
-           (unsigned)idfMsc.blockSize(), (unsigned)idfMsc.blockCount(), hex);
+  snprintf(out, sizeof out, "raw lba=%u ok=%d changed=%d blockSize=%u blockCount=%u",
+           (unsigned)lba, (int)ok, idfMsc.lastChanged(), (unsigned)idfMsc.blockSize(),
+           (unsigned)idfMsc.blockCount());
   return String(out);
 }
 
