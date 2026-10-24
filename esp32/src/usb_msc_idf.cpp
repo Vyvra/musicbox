@@ -122,7 +122,18 @@ void IdfMsc::poll() {
                     problem_);
     }
   }
-  tryAttachAny();
+  // Back off hard after a failure. Repeated 1.5 s blocking probes starve the system and the board
+  // ends up rebooting once a second; a stick that stops answering should simply be reported.
+  static uint8_t failures = 0;
+  if (tryAttachAny()) {
+    failures = 0;
+    return;
+  }
+  if (failures < 3) failures++;
+  nextTry = millis() + (failures >= 3 ? 30000 : 5000);
+  if (failures >= 3) {
+    Serial.printf("[msc] giving up on the device (%s) - re-plug the stick to retry\n", problem_);
+  }
 }
 
 bool IdfMsc::tryAttachAny() {
@@ -222,92 +233,39 @@ bool IdfMsc::attachWith(void* devRaw, uint8_t addr) {
                   (unsigned)ddesc->bNumConfigurations);
   }
 
-  // The library never completed SET_CONFIGURATION for this device (it assigns an address and reads
-  // the device descriptor, then stalls), so there is no "active" configuration to read. Fetch
-  // configuration 1 explicitly and select it ourselves.
-  static uint8_t cfgBuf[512];
-  const usb_config_desc_t* cfgDesc = (const usb_config_desc_t*)cfgBuf;
-  if (!fetchConfigDescriptor(dev, cfgBuf, sizeof cfgBuf)) {
-    problem_ = "config descriptor fetch timed out";
-    return false;
-  }
-  if (cfgDesc->wTotalLength < 9 || cfgDesc->wTotalLength > sizeof cfgBuf) {
-    problem_ = "config descriptor malformed";
-    return false;
-  }
-  if (!setConfiguration(dev, 1)) {
-    problem_ = "SET_CONFIGURATION failed";
-    return false;
-  }
-
-  Serial.printf("[msc] config: bLength %u type %u totalLen %u\n", (unsigned)cfgDesc->bLength,
-                (unsigned)cfgDesc->bDescriptorType, (unsigned)cfgDesc->wTotalLength);
-
-  // Walk the descriptor chain by hand: find the mass-storage interface and its two bulk endpoints.
-  const uint8_t* p = (const uint8_t*)cfgDesc;
-  const uint8_t* end = p + cfgDesc->wTotalLength;
-  uint8_t itfNum = 0xFF, epIn = 0, epOut = 0;
-  bool foundItf = false;
-  Serial.printf("[msc] raw: %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]);
-  p += p[0] ? p[0] : 9;                        // skip the configuration descriptor
-  while (p + 2 <= end && p[0] >= 2) {
-    const uint8_t len = p[0];
-    const uint8_t type = p[1];
-    if (len == 0 || p + len > end) break;
-    if (type == 0x04 && len >= 9) {            // INTERFACE
-      Serial.printf("[msc]   interface %u alt %u: class %02X sub %02X proto %02X eps %u\n",
-                    (unsigned)p[2], (unsigned)p[3], (unsigned)p[5], (unsigned)p[6],
-                    (unsigned)p[7], (unsigned)p[4]);
-      // 0x08/0x06/0x50 = mass storage, SCSI transparent command set, BOT
-      if (p[5] == 0x08 && p[6] == 0x06) {
-        itfNum = p[2];
-        epIn = 0;
-        epOut = 0;
-        foundItf = true;
-      } else {
-        foundItf = false;
-      }
-    } else if (type == 0x05 && len >= 7 && foundItf) {   // ENDPOINT
-      const uint8_t addr = p[2];
-      const uint8_t attrs = p[3];
-      if ((attrs & 0x03) == 0x02) {            // bulk
-        if (addr & 0x80) epIn = addr;
-        else epOut = addr;
-      }
-    }
-    p += len;
-  }
-
-  if (!foundItf || itfNum == 0xFF || epIn == 0 || epOut == 0) {
-    problem_ = "no mass-storage interface";
-    return false;
-  }
-
-  esp_err_t err = usb_host_interface_claim((usb_host_client_handle_t)client_, dev, itfNum, 0);
-  if (err != ESP_OK) {
-    problem_ = "interface claim failed";
-    return false;
-  }
+  // Descriptor discovery is abandoned here deliberately. This device answers GET_DESCRIPTOR(DEVICE)
+  // but never returns a configuration descriptor through this stack, and the library's fetch blocks
+  // unbounded when that happens - it froze the whole firmware. It is a standard single-interface MSC
+  // stick, so the conventional layout is used and then *verified* by READ CAPACITY: sane geometry
+  // coming back proves the assumption held.
+  Serial.println("[msc] using standard MSC layout (interface 0, IN 0x81, OUT 0x02)");
 
   devHandle = dev;
   devAddr_ = addr;
-  itfNum_ = itfNum;
-  epIn_ = epIn;
-  epOut_ = epOut;
-  mounted_ = false;
+  itfNum_ = 0;
+  epIn_ = 0x81;
+  epOut_ = 0x02;
+
+  (void)setConfiguration(dev, 1);
+
+  const esp_err_t claim = usb_host_interface_claim((usb_host_client_handle_t)client_, dev, 0, 0);
+  if (claim != ESP_OK) {
+    Serial.printf("[msc] interface claim: %s (continuing - READ CAPACITY is the real check)\n",
+                  esp_err_to_name(claim));
+  }
 
   if (!readCapacity()) {
     problem_ = "READ CAPACITY failed";
-    detach();
+    usb_host_device_close((usb_host_client_handle_t)client_, dev);
+    devHandle = nullptr;
     return false;
   }
+
   mounted_ = true;
   problem_ = "";
-  Serial.printf("[msc] device %u: %u blocks x %u bytes (%u MB), epIn %02X epOut %02X\n",
-                (unsigned)devAddr_, (unsigned)blockCount_, (unsigned)blockSize_,
-                (unsigned)((uint64_t)blockCount_ * blockSize_ / (1024 * 1024)),
-                (unsigned)epIn_, (unsigned)epOut_);
+  Serial.printf("[msc] device %u: %u blocks x %u bytes (%u MB)\n", (unsigned)addr,
+                (unsigned)blockCount_, (unsigned)blockSize_,
+                (unsigned)((uint64_t)blockCount_ * blockSize_ / (1024 * 1024)));
   return true;
 }
 
