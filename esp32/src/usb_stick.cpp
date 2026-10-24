@@ -1,9 +1,7 @@
 #include "usb_stick.h"
 
 #include <USBHost.h>
-
-#include <tusb.h>
-#include <esp32-hal-tinyusb.h>   // tinyusb_host_init(): the core's host bring-up
+#include <USBHostMSC.h>
 
 namespace mbx {
 
@@ -31,57 +29,58 @@ void UsbStick::poll() {
   // The core services TinyUSB on a background worker; task() dispatches the deferred callbacks.
   USBHost.task();
 
-  if (eventMount_) {
-    eventMount_ = false;
-    Serial.printf("[usb] storage found: %u blocks x %u bytes (%u MB), probing filesystem\n",
-                  (unsigned)blocks_, (unsigned)blockBytes_,
-                  (unsigned)((uint64_t)blocks_ * blockBytes_ / (1024 * 1024)));
-  }
+  // Mount/unmount are discovered by polling the core's MSC driver. Its callbacks must not be
+  // redefined: USBHostMSC.cpp owns tuh_msc_mount_cb and tuh_msc_umount_cb.
+  const bool busMounted = USBHostMSC.mounted();
+
   if (eventDetach_) {
     eventDetach_ = false;
     Serial.println("[usb] device removed");
   }
+
+  if (!busMounted) {
+    if (mounted_ || mountPending_) handleUnmount();
+    return;
+  }
+  if (!mountPending_ && !mounted_) {
+    devAddr_ = USBHostMSC.devAddr();
+    lun_ = USBHostMSC.lun();
+    blocks_ = USBHostMSC.blockCount();
+    blockBytes_ = USBHostMSC.blockSize();
+    if (blocks_ == 0 || blockBytes_ == 0) return;   // mount still settling
+    mounted_ = false;
+    problem_ = "";
+    dumped_ = false;
+    mountTime_ = millis();
+    mountDeadline_ = millis() + 4000;
+    nextProbe_ = 0;
+    mountPending_ = true;
+    Serial.printf("[usb] storage found: %u blocks x %u bytes (%u MB), probing filesystem\n",
+                  (unsigned)blocks_, (unsigned)blockBytes_,
+                  (unsigned)((uint64_t)blocks_ * blockBytes_ / (1024 * 1024)));
+  }
+
   if (!mountPending_ || mounted_) return;
-  // One attempt per 100 ms. Retrying every loop iteration hammers the MSC layer with blocking
-  // transfers and corrupts its internal state (observed as a LoadProhibited panic in printf).
+  // One attempt per 100 ms: retrying every loop iteration hammers the MSC layer with transfers.
   if ((int32_t)(millis() - nextProbe_) < 0) return;
   nextProbe_ = millis() + 100;
   if (probe()) {
     mountPending_ = false;
     return;
   }
-  // A freshly enumerated stick answers "not ready" to the first read for a moment (the unit is
-  // still spinning up), so keep trying instead of declaring the filesystem unsupported.
   if ((int32_t)(millis() - mountDeadline_) >= 0) {
     mountPending_ = false;
     describeFailure();
   }
 }
 
-void UsbStick::handleMount(uint8_t devAddr) {
-  // Only record the device here. This runs inside the host task, and blocking reads from inside it
-  // both stall the stack and fail on a stick that has not finished initialising.
-  devAddr_ = devAddr;
-  lun_ = 0;
-  blocks_ = tuh_msc_get_block_count(devAddr, lun_);
-  blockBytes_ = tuh_msc_get_block_size(devAddr, lun_);
-  mounted_ = false;
-  problem_ = "";
-  mountDeadline_ = millis() + 4000;
-  nextProbe_ = 0;
-  dumped_ = false;
-  mountPending_ = true;
-  eventMount_ = true;   // reported by poll()
-}
-
 bool UsbStick::probe() {
   // The block reader the filesystem layer uses. Captures this, but UsbStick is a global,
   // so the callback cannot outlive it.
-  fat::BlockReader reader = [this](uint32_t lba, uint8_t* buffer, uint32_t count) -> bool {
-    if (!tuh_msc_ready(devAddr_)) return false;
-    if (count > 0xFFFF) return false;
-    // NULL completion callback = blocking, which is what a filesystem call expects.
-    return tuh_msc_read10(devAddr_, lun_, buffer, lba, (uint16_t)count, nullptr, 0);
+  fat::BlockReader reader = [](uint32_t lba, uint8_t* buffer, uint32_t count) -> bool {
+    // The core's driver waits for endpoint readiness and recovers from BOT errors; calling
+    // tuh_msc_read10 directly skipped both and failed on a stick that was still settling.
+    return USBHostMSC.readBlocks(lba, buffer, count);
   };
 
   if (!storage_.mount(reader)) {
@@ -123,16 +122,17 @@ void UsbStick::dumpBootSector(const fat::BlockReader& reader) {
                 (unsigned)rd32(boot + 0x5C), (unsigned)rd32(boot + 0x60));
   Serial.printf("[usb]   byte 0x6C (sector shift)=%u 0x6D (cluster shift)=%u 0x6E (fats)=%u\n",
                 (unsigned)boot[0x6C], (unsigned)boot[0x6D], (unsigned)boot[0x6E]);
+
 }
 
 void UsbStick::describeFailure() {
   // Report what the stick actually is instead of guessing. The mount routine rejects anything it
   // cannot parse, and exFAT is only one of the possibilities: NTFS, a missing signature and an
   // unusual FAT variant all land here too.
-  fat::BlockReader reader = [this](uint32_t lba, uint8_t* buffer, uint32_t count) -> bool {
-    if (!tuh_msc_ready(devAddr_)) return false;
-    if (count > 0xFFFF) return false;
-    return tuh_msc_read10(devAddr_, lun_, buffer, lba, (uint16_t)count, nullptr, 0);
+  fat::BlockReader reader = [](uint32_t lba, uint8_t* buffer, uint32_t count) -> bool {
+    // The core's driver waits for endpoint readiness and recovers from BOT errors; calling
+    // tuh_msc_read10 directly skipped both and failed on a stick that was still settling.
+    return USBHostMSC.readBlocks(lba, buffer, count);
   };
 
   uint8_t boot[512] = {};
@@ -196,8 +196,5 @@ String UsbStick::describe() const {
 // the MSC callbacks below, which is all this project needs.
 
 // MSC callbacks: only fire once the mass-storage interface is recognised.
-extern "C" void tuh_msc_mount_cb(uint8_t dev_addr) { mbx::usbStick.handleMount(dev_addr); }
-extern "C" void tuh_msc_umount_cb(uint8_t dev_addr) {
-  (void)dev_addr;
-  mbx::usbStick.handleUnmount();
-}
+// Neither tuh_msc_mount_cb nor tuh_msc_umount_cb is defined here: the core's USBHostMSC.cpp owns
+// both and forwards them to USBHostMSC, which UsbStick polls in poll().

@@ -48,6 +48,7 @@ class UsbStick {
   volatile bool mounted_ = false;
   volatile bool mountPending_ = false;
   uint32_t mountDeadline_ = 0;
+  uint32_t mountTime_ = 0;
   uint32_t nextProbe_ = 0;
   bool dumped_ = false;
   // The host stack runs in its own task, so its callbacks must not print: HardwareSerial is not
