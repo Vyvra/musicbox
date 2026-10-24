@@ -59,7 +59,7 @@
 // Bring-up heartbeat on the serial console: proves loop() is running and shows whether
 // the UART is receiving. Set to 0 to silence it once the box is in use.
 #define HEARTBEAT_MS        10000UL
-#define SAVE_INTERVAL_MS    5000UL    // checkpoint position while playing
+#define SAVE_INTERVAL_MS   15000UL    // checkpoint position while playing
 // A yank ends the decoder before we can ask it where it was, and it then reports 0. Saving every
 // few seconds means the last good value survives even when the final save is a stale zero.
 #define RESUME_MIN_SECONDS     0.5f   // below this, start from the beginning

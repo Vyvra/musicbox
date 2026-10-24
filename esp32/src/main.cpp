@@ -219,6 +219,24 @@ void loop() {
   mbx::usbStick.poll();          // pumps enumeration and the MSC transfer queue
 
   const bool mounted = mbx::usbStick.mounted();
+
+  // Self-heal a wedged host controller. Pulling the stick mid-transfer can leave TinyUSB's MSC
+  // state stuck: the removal is noticed, but the stick never re-enumerates when it comes back, and
+  // only a reboot recovers it. Reboot deliberately, once per removal, rather than sitting silent
+  // until someone power-cycles the box.
+  static bool hadMount = false;
+  static uint32_t absentSince = 0;
+  if (mounted) {
+    hadMount = true;
+    absentSince = 0;
+  } else if (hadMount && absentSince == 0) {
+    absentSince = millis();
+  } else if (hadMount && absentSince != 0 && millis() - absentSince > 20000) {
+    Serial.println("[box] stick has not come back after 20s - restarting to reset the USB host");
+    Serial.flush();
+    delay(200);
+    esp_restart();
+  }
   if (mounted && box == nullptr) {
     setLed(LedState::Mounted);
     maybeProvision();          // a config stick provisions and may also carry music

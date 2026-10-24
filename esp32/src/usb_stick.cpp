@@ -78,7 +78,7 @@ bool UsbStick::probe() {
     // DWC2 DMA engine, and a stack array is only byte-aligned: the transfer then completes "success
     // fully" while the data lands somewhere else, which is exactly what an all-zero boot sector with
     // a stray signature looks like. Chunking also bounds the bounce buffer's size.
-    static uint8_t __attribute__((aligned(32))) bounce[512 * 16];
+    static uint8_t __attribute__((aligned(32))) bounce[512 * 64];
     const uint32_t chunkBlocks = sizeof(bounce) / 512;
     uint32_t done = 0;
     while (done < count) {
@@ -144,7 +144,7 @@ void UsbStick::describeFailure() {
     // DWC2 DMA engine, and a stack array is only byte-aligned: the transfer then completes "success
     // fully" while the data lands somewhere else, which is exactly what an all-zero boot sector with
     // a stray signature looks like. Chunking also bounds the bounce buffer's size.
-    static uint8_t __attribute__((aligned(32))) bounce[512 * 16];
+    static uint8_t __attribute__((aligned(32))) bounce[512 * 64];
     const uint32_t chunkBlocks = sizeof(bounce) / 512;
     uint32_t done = 0;
     while (done < count) {
