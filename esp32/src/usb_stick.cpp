@@ -1,7 +1,6 @@
 #include "usb_stick.h"
 
-#include <USBHost.h>
-#include <USBHostMSC.h>
+#include "usb_msc_idf.h"
 
 namespace mbx {
 
@@ -12,28 +11,20 @@ static inline uint32_t rd32(const uint8_t* p) {
 UsbStick usbStick;
 
 bool UsbStick::begin() {
-  // Use the core's USBHost class rather than tinyusb_host_init() directly. It performs the same
-  // DWC2/PHY reset (the ROM leaves the controller in persist/USJ state after a USB download, so a
-  // bare tuh_init() never enumerates), starts a background worker task, and - crucially - documents
-  // that Serial/FS work must not happen inside TinyUSB callbacks because it can Store-fault.
-  // NOTE: pinning the worker (USBHost.setCore) was tried and rejected: core 0 overflows IDLE0's
-  // ~1.5 kB stack, core 1 trips the interrupt watchdog. Both are the transfer path, not scheduling.
-  if (!USBHost.begin()) {
-    started_ = false;
-    problem_ = "USB host controller failed to start";
-    return false;
-  }
-  started_ = true;
-  return true;
+  // Storage runs on ESP-IDF's usb_host, not Arduino's TinyUSB host. TinyUSB enumerates the stick but
+  // cannot sustain block reads here (IDLE0 stack canary on core 0, interrupt watchdog on core 1,
+  // whichever core its worker is pinned to). See usb_msc_idf.h.
+  started_ = idfMsc.begin();
+  if (!started_) problem_ = idfMsc.problem();
+  return started_;
 }
 
 void UsbStick::poll() {
-  // The core services TinyUSB on a background worker; task() dispatches the deferred callbacks.
-  USBHost.task();
+  idfMsc.poll();
 
   // Mount/unmount are discovered by polling the core's MSC driver. Its callbacks must not be
   // redefined: USBHostMSC.cpp owns tuh_msc_mount_cb and tuh_msc_umount_cb.
-  const bool busMounted = USBHostMSC.mounted();
+  const bool busMounted = idfMsc.mounted();
 
   if (eventDetach_) {
     eventDetach_ = false;
@@ -45,10 +36,10 @@ void UsbStick::poll() {
     return;
   }
   if (!mountPending_ && !mounted_) {
-    devAddr_ = USBHostMSC.devAddr();
-    lun_ = USBHostMSC.lun();
-    blocks_ = USBHostMSC.blockCount();
-    blockBytes_ = USBHostMSC.blockSize();
+    devAddr_ = 0;
+    lun_ = 0;
+    blocks_ = idfMsc.blockCount();
+    blockBytes_ = idfMsc.blockSize();
     if (blocks_ == 0 || blockBytes_ == 0) return;   // mount still settling
     mounted_ = false;
     problem_ = "";
@@ -92,7 +83,7 @@ bool UsbStick::probe() {
     uint32_t done = 0;
     while (done < count) {
       const uint32_t n = (count - done < chunkBlocks) ? (count - done) : chunkBlocks;
-      if (!USBHostMSC.readBlocks(lba + done, bounce, n)) return false;
+      if (!idfMsc.readBlocks(lba + done, bounce, n)) return false;
       memcpy(buffer + (size_t)done * 512, bounce, (size_t)n * 512);
       done += n;
     }
@@ -158,7 +149,7 @@ void UsbStick::describeFailure() {
     uint32_t done = 0;
     while (done < count) {
       const uint32_t n = (count - done < chunkBlocks) ? (count - done) : chunkBlocks;
-      if (!USBHostMSC.readBlocks(lba + done, bounce, n)) return false;
+      if (!idfMsc.readBlocks(lba + done, bounce, n)) return false;
       memcpy(buffer + (size_t)done * 512, bounce, (size_t)n * 512);
       done += n;
     }
@@ -190,9 +181,13 @@ void UsbStick::describeFailure() {
   Serial.printf("[usb] %s\n", problem_.c_str());
 }
 
-bool UsbStick::hostInited() const { return tuh_inited(); }
+bool UsbStick::hostInited() const {
+  return started_;   // the IDF host library installed and its client registered
+}
 
-bool UsbStick::portActive() const { return tuh_rhport_is_active(0); }
+bool UsbStick::portActive() const {
+  return idfMsc.mounted();   // a device is open and answering SCSI
+}
 
 void UsbStick::handleUnmount() {
   mounted_ = false;
@@ -200,7 +195,7 @@ void UsbStick::handleUnmount() {
   devAddr_ = 0;
   blocks_ = 0;
   storage_.unmount();
-  eventDetach_ = true;  // reported by poll()
+  eventDetach_ = true;   // reported by poll()
 }
 
 String UsbStick::debugRawRead(uint32_t lba) {
@@ -208,7 +203,7 @@ String UsbStick::debugRawRead(uint32_t lba) {
   // arrived, which is different from a read that fails outright.
   uint8_t buf[512];
   memset(buf, 0xA5, sizeof buf);
-  const bool ok = USBHostMSC.readBlocks(lba, buf, 1);
+  const bool ok = idfMsc.readBlocks(lba, buf, 1);
   int changed = 0;
   for (size_t i = 0; i < sizeof buf; i++) {
     if (buf[i] != 0xA5) changed++;
@@ -218,7 +213,7 @@ String UsbStick::debugRawRead(uint32_t lba) {
   char out[200];
   snprintf(out, sizeof out, "raw lba=%u ok=%d changed=%d/%u blockSize=%u dev=%u hex=%s",
            (unsigned)lba, (int)ok, changed, (unsigned)sizeof buf,
-           (unsigned)USBHostMSC.blockSize(), (unsigned)USBHostMSC.devAddr(), hex);
+           (unsigned)idfMsc.blockSize(), (unsigned)idfMsc.blockCount(), hex);
   return String(out);
 }
 

@@ -1,75 +1,81 @@
-// Does ESP-IDF's own USB host stack see a device on the native port?
+// Minimal check: does ESP-IDF's host library actually see a device on the port?
 //
-// Arduino's TinyUSB host reports nothing at all when a stick is inserted. That could equally be a
-// driver-initialisation problem or an electrical one, and TinyUSB's debug output is compiled into a
-// prebuilt archive so it cannot be switched on. IDF's usb_host is a separate implementation, so it
-// splits the two cases without any hardware work.
+// Prints client events (NEW_DEV / DEV_GONE), the device count, and the address list, so "no device
+// attached" can be told apart from "attached but our attach logic is wrong".
 #include <Arduino.h>
 #include <usb/usb_host.h>
 
-static void client_task(void* arg) {
-  usb_host_client_handle_t client;
-  usb_host_client_config_t cfg = {};
-  cfg.is_synchronous = false;
-  cfg.async.client_event_callback = [](const usb_host_client_event_msg_t* msg, void* arg) {
-    switch (msg->event) {
-      case USB_HOST_CLIENT_EVENT_NEW_DEV:
-        Serial.printf("[idf] NEW_DEV addr=%u\n", msg->new_dev.address);
-        break;
-      case USB_HOST_CLIENT_EVENT_DEV_GONE:
-        Serial.println("[idf] DEV_GONE");
-        break;
-      default: break;
-    }
-  };
-  esp_err_t err = usb_host_client_register(&cfg, &client);
-  Serial.printf("[idf] client register: %s\n", esp_err_to_name(err));
-  if (err != ESP_OK) { vTaskDelete(NULL); return; }
+static usb_host_client_handle_t g_client = nullptr;
 
-  while (true) {
-    usb_host_client_handle_events(client, portMAX_DELAY);
-  }
-}
-
-static void lib_task(void* arg) {
-  uint32_t last_report = 0;
-  while (true) {
-    uint32_t flags = 0;
-    usb_host_lib_handle_events(pdMS_TO_TICKS(500), &flags);
-    if (flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-      Serial.println("[idf] no clients");
-    }
-    if (millis() - last_report > 3000) {
-      last_report = millis();
-      usb_host_lib_info_t info = {};
-      if (usb_host_lib_info(&info) == ESP_OK) {
-        Serial.printf("[idf] devices=%d clients=%d\n", info.num_devices, info.num_clients);
+static void onEvent(const usb_host_client_event_msg_t* msg, void*) {
+  if (msg->event == USB_HOST_CLIENT_EVENT_NEW_DEV) {
+    Serial.printf("[probe] NEW_DEV addr=%u\n", msg->new_dev.address);
+    usb_device_handle_t dev = nullptr;
+    if (usb_host_device_open(g_client, msg->new_dev.address, &dev) == ESP_OK) {
+      usb_device_info_t info = {};
+      if (usb_host_device_info(dev, &info) == ESP_OK) {
+        Serial.printf("[probe] opened: speed %d addrs %d\n", (int)info.speed,
+                      (int)info.dev_addr);
       }
+    } else {
+      Serial.println("[probe] open failed");
     }
+  } else if (msg->event == USB_HOST_CLIENT_EVENT_DEV_GONE) {
+    Serial.println("[probe] DEV_GONE");
   }
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(400);
+  delay(500);
   Serial.println();
-  Serial.println("[idf] USB host probe (ESP-IDF stack, independent of TinyUSB)");
+  Serial.println("[probe] IDF host: event check");
 
   usb_host_config_t cfg = {};
   cfg.intr_flags = ESP_INTR_FLAG_LEVEL1;
   cfg.skip_phy_setup = false;
-  esp_err_t err = usb_host_install(&cfg);
-  Serial.printf("[idf] host install: %s\n", esp_err_to_name(err));
-  if (err != ESP_OK) {
-    Serial.println("[idf] cannot continue - another USB driver probably owns the PHY");
-    return;
-  }
+  Serial.printf("[probe] install: %s\n", esp_err_to_name(usb_host_install(&cfg)));
 
-  xTaskCreate(lib_task, "usb_lib", 4096, nullptr, 2, nullptr);
-  xTaskCreate(client_task, "usb_cli", 4096, nullptr, 3, nullptr);
-  Serial.println("[idf] waiting for a device - insert the stick now");
+  usb_host_client_config_t ccfg = {};
+  ccfg.is_synchronous = false;
+  ccfg.max_num_event_msg = 5;
+  ccfg.async.client_event_callback = onEvent;
+  ccfg.async.callback_arg = nullptr;
+  Serial.printf("[probe] client: %s\n", esp_err_to_name(usb_host_client_register(&ccfg, &g_client)));
 }
 
 void loop() {
-  delay(1000);
+  if (g_client == nullptr) {
+    delay(1000);
+    return;
+  }
+  uint32_t flags = 0;
+  usb_host_lib_handle_events(10, &flags);
+  usb_host_client_handle_events(g_client, 10);
+
+  static uint32_t last = 0;
+  if (millis() - last > 2000) {
+    last = millis();
+    usb_host_lib_info_t info = {};
+    uint8_t addrs[8] = {};
+    int count = -1;
+    const esp_err_t err = usb_host_device_addr_list_fill(8, addrs, &count);
+    if (usb_host_lib_info(&info) == ESP_OK) {
+      Serial.printf("[probe] devices=%d clients=%d fill=%s count=%d raw=%u,%u,%u\n",
+                    info.num_devices, info.num_clients, esp_err_to_name(err), count,
+                    (unsigned)addrs[0], (unsigned)addrs[1], (unsigned)addrs[2]);
+    }
+    // The list comes back empty, so try opening known addresses directly.
+    for (uint8_t a = 1; a <= 2; a++) {
+      usb_device_handle_t dev = nullptr;
+      const esp_err_t oerr = usb_host_device_open(g_client, a, &dev);
+      Serial.printf("[probe] open addr %u -> %s\n", a, esp_err_to_name(oerr));
+      if (oerr == ESP_OK) {
+        usb_device_info_t di = {};
+        if (usb_host_device_info(dev, &di) == ESP_OK) {
+          Serial.printf("[probe]   info: speed %d\n", (int)di.speed);
+        }
+      }
+    }
+  }
 }
