@@ -52,3 +52,19 @@ failure but not the transfer-path instability.
 3. If neither holds, revisit storage: an SPI microSD drops the entire USB host stack out of the
    picture and everything above the `BlockReader` seam (fat_reader, fs adapter, controller, LED,
    resume) is already written and tested.
+
+## Read stability on TinyUSB (measured)
+
+From a dedicated 16 KB task on core 1, with the host worker pumped from the main loop and a
+200 ms settle after mount:
+
+```
+[read] task start, blocks=15482880
+[read] A: 64x1 block   ok=2  fail=62
+[read] B: 32 scattered ok=0  fail=32
+[read] C: 8x8 blocks   ok=0  fail=8
+```
+
+All 104 reads returned within ~0.2 s, i.e. they were rejected immediately rather than timing out -
+consistent with TinyUSB reporting the MSC unit as not ready, and with only the first couple of
+transfers getting through. So mounting is solid and single-block reads are not, from any task.
