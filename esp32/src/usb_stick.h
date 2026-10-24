@@ -35,9 +35,26 @@ class UsbStick {
   void handleUnmount();
 
  private:
+  // The filesystem probe is deliberately NOT done in the MSC mount callback: that runs inside the
+  // host task, where the first read of a freshly enumerated stick fails because the unit has not
+  // finished spinning up. Attempting it from poll() means a failed probe costs a retry, not a
+  // permanently unmounted stick.
+  bool probe();  // one mount attempt; true once the volume is usable
+  void describeFailure();  // explain why the probe gave up, using the boot sector
+  void dumpBootSector(const fat::BlockReader& reader);  // one-off hex + field dump
+
   UsbStorage storage_;
   bool started_ = false;
   volatile bool mounted_ = false;
+  volatile bool mountPending_ = false;
+  uint32_t mountDeadline_ = 0;
+  uint32_t nextProbe_ = 0;
+  bool dumped_ = false;
+  // The host stack runs in its own task, so its callbacks must not print: HardwareSerial is not
+  // thread-safe and interleaved writes from two tasks corrupt it (observed as StoreProhibited
+  // panics inside printf). Callbacks record events; poll() reports them from the main loop.
+  volatile bool eventMount_ = false;
+  volatile bool eventDetach_ = false;
   uint8_t devAddr_ = 0;
   uint8_t lun_ = 0;
   uint32_t blocks_ = 0;

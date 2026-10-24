@@ -73,7 +73,9 @@ nothing about files. So:
 | MSC bring-up + `tuh_task` poll + hot-plug (`src/usb_stick.cpp`) | ✅ compiles and links |
 | **Stick as the playback source** | ✅ `main.cpp`: mount starts the controller, unmount checkpoints and stops |
 | Status LED (on-board WS2812, GPIO48) | ✅ booting / idle / playing / attention |
-| Actually running on a board | ⬜ needs hardware |
+| Actually running on a board | ✅ boots clean, heartbeat every 10 s, `status` and `usb` answer |
+| **Audio out (I2S → MAX98357A → speaker)** | ✅ **verified on hardware — real music plays** (see `docs/wiring.md`) |
+| USB stick enumeration | ❌ the host stack starts but no device is ever detected |
 
 SD support from the earlier sketch was **removed**: this board has no card slot, and the
 stick is the interaction. That also shrank the image (24.2% → 23.1% of flash) and left one
