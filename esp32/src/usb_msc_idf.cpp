@@ -1,163 +1,64 @@
-// USB mass storage through ESP-IDF's usb_host + Espressif's MSC driver.
+// USB mass storage through Arduino's TinyUSB host + the core's USBHostMSC driver.
+//
+// See usb_msc_idf.h for why this is the only stack that works on this board, and why raw
+// tuh_msc_read10() calls must not be used.
 #include "usb_msc_idf.h"
 
 #include <Arduino.h>
 #include <string.h>
 
-#include "soc/rtc_cntl_reg.h"
-#include "soc/periph_defs.h"
-#include "esp_private/periph_ctrl.h"
-#include "usb/usb_host.h"
-#include "usb/msc_host.h"
-#include "esp_private/msc_scsi_bot.h"
+#include <USBHost.h>
+#include <USBHostMSC.h>
 
 namespace mbx {
 
 IdfMsc idfMsc;
 
-// Free-function trampoline: msc_host_driver_config_t takes a plain C callback.
-void mscEventTrampoline(const void* eventPtr, void* arg) {
-  const msc_host_event_t* ev = (const msc_host_event_t*)eventPtr;
-  IdfMsc* self = (IdfMsc*)arg;
-  if (self == nullptr || ev == nullptr) return;
-  if (ev->event == msc_host_event_t::MSC_DEVICE_CONNECTED) {
-    self->onEvent(msc_host_event_t::MSC_DEVICE_CONNECTED, ev->device.address);
-  } else if (ev->event == msc_host_event_t::MSC_DEVICE_DISCONNECTED) {
-    self->onEvent(msc_host_event_t::MSC_DEVICE_DISCONNECTED, 0);
-  }
-}
-
-void IdfMsc::onEvent(int event, uint8_t address) {
-  // Runs in the driver's background task: record the event only, never block or print here.
-  if (event == msc_host_event_t::MSC_DEVICE_CONNECTED) {
-    pendingAddr_ = address;
-  } else if (event == msc_host_event_t::MSC_DEVICE_DISCONNECTED) {
-    detachPending_ = true;
-  }
-}
-
 bool IdfMsc::begin() {
-  if (installed_) return true;
-
-  // Reset the USB module before handing the PHY to the host library. After a USB download the ROM
-  // leaves DWC2/PHY in persist/USJ state, and in that state NOTHING enumerates until a pad/EN reset -
-  // which is exactly the "stick powered, LED blinks, but the bus stays empty" symptom. The Arduino
-  // core does this in its own host bring-up; usb_host_install() does not.
-#if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3)
-  REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_IO_MUX_RESET_DISABLE);
-  REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_USB_RESET_DISABLE);
-  periph_module_reset(PERIPH_USB_MODULE);
-  periph_module_enable(PERIPH_USB_MODULE);
-  Serial.println("[msc] USB module reset before host install");
-#endif
-
-  usb_host_config_t hostCfg = {};
-  hostCfg.intr_flags = ESP_INTR_FLAG_LEVEL1;
-  hostCfg.skip_phy_setup = false;
-  esp_err_t err = usb_host_install(&hostCfg);
-  if (err != ESP_OK) {
-    problem_ = "usb_host_install failed";
-    Serial.printf("[msc] host install: %s\n", esp_err_to_name(err));
+  if (!USBHost.begin()) {
+    problem_ = "TinyUSB host failed to start";
     return false;
   }
-
-  msc_host_driver_config_t mscCfg = {};
-  mscCfg.create_backround_task = true;   // the driver's own task handles USB events
-  mscCfg.task_priority = 5;
-  mscCfg.stack_size = 4096;
-  mscCfg.core_id = tskNO_AFFINITY;
-  mscCfg.callback = (msc_host_event_cb_t)mscEventTrampoline;
-  mscCfg.callback_arg = this;
-
-  err = msc_host_install(&mscCfg);
-  if (err != ESP_OK) {
-    problem_ = "msc_host_install failed";
-    Serial.printf("[msc] driver install: %s\n", esp_err_to_name(err));
-    return false;
-  }
-
-  installed_ = true;
   problem_ = "waiting for a stick";
+  wasMounted_ = false;
   return true;
 }
 
 void IdfMsc::poll() {
-  if (!installed_) return;
+  USBHost.task();
 
-  if (detachPending_) {
-    detachPending_ = false;
-    if (device_ != nullptr) {
-      msc_host_uninstall_device((msc_host_device_handle_t)device_);
-      device_ = nullptr;
+  const bool now = USBHostMSC.mounted();
+  if (now) {
+    if (!wasMounted_) {
+      wasMounted_ = true;
+      blockCount_ = USBHostMSC.blockCount();
+      blockSize_ = USBHostMSC.blockSize() ? USBHostMSC.blockSize() : 512;
+      readErrors_ = 0;
+      problem_ = "";
+      Serial.printf("[usb] storage: %u blocks x %u bytes (%u MB), addr %u\n",
+                    (unsigned)blockCount_, (unsigned)blockSize_,
+                    (unsigned)((uint64_t)blockCount_ * blockSize_ / (1024 * 1024)),
+                    (unsigned)USBHostMSC.devAddr());
+    }
+    mounted_ = true;
+  } else {
+    if (wasMounted_) {
+      wasMounted_ = false;
+      Serial.println("[usb] storage removed");
     }
     mounted_ = false;
     blockCount_ = 0;
-    problem_ = "stick removed";
   }
-
-  if (mounted_) return;
-
-  // A stick that is already plugged in at boot never produces a connect event for us: the host
-  // library enumerates it before this client is registered. So when no event arrives, install by
-  // address directly - the driver does the class-specific setup from the address alone.
-  static uint32_t nextProbe = 0;
-  if (pendingAddr_ == 0) {
-    if ((int32_t)(millis() - nextProbe) < 0) return;
-    nextProbe = millis() + 2000;
-    static uint32_t nextLog = 0;
-    esp_err_t lastErr = ESP_OK;
-    for (uint8_t candidate = 1; candidate <= 4; candidate++) {
-      if (tryInstall(candidate)) return;
-      lastErr = lastProbeErr();
-    }
-    if ((int32_t)(millis() - nextLog) >= 0) {
-      nextLog = millis() + 10000;
-      usb_host_lib_info_t info = {};
-      usb_host_lib_info(&info);
-      Serial.printf("[msc] no device to install (last error: %s, lib devices=%d)\n",
-                    esp_err_to_name(lastErr), info.num_devices);
-    }
-    problem_ = "no device";
-    return;
-  }
-
-  const uint8_t addr = pendingAddr_;
-  pendingAddr_ = 0;
-
-  tryInstall(addr);
-}
-
-bool IdfMsc::tryInstall(uint8_t addr) {
-  msc_host_device_handle_t dev = nullptr;
-  const esp_err_t err = msc_host_install_device(addr, &dev);
-  lastErr_ = err;
-  if (err != ESP_OK) return false;
-
-  msc_host_device_info_t info = {};
-  if (msc_host_get_device_info(dev, &info) != ESP_OK || info.sector_size == 0) {
-    msc_host_uninstall_device(dev);
-    problem_ = "device info failed";
-    return false;
-  }
-
-  device_ = dev;
-  blockCount_ = info.sector_count;
-  blockSize_ = info.sector_size;
-  mounted_ = true;
-  problem_ = "";
-  Serial.printf("[msc] device %u: %04X:%04X %u blocks x %u bytes (%u MB)\n", (unsigned)addr,
-                info.idVendor, info.idProduct, (unsigned)blockCount_, (unsigned)blockSize_,
-                (unsigned)((uint64_t)blockCount_ * blockSize_ / (1024 * 1024)));
-  return true;
 }
 
 bool IdfMsc::readBlocks(uint32_t lba, void* buffer, uint32_t blocks) {
-  if (!mounted_ || device_ == nullptr || blocks == 0) return false;
-  const esp_err_t err =
-    scsi_cmd_read10((msc_host_device_handle_t)device_, (uint8_t*)buffer, lba, blocks, blockSize_);
-  if (err != ESP_OK) {
-    Serial.printf("[msc] read10 lba=%u blocks=%u: %s\n", (unsigned)lba, (unsigned)blocks,
-                  esp_err_to_name(err));
+  if (!mounted_ || blocks == 0) return false;
+  if (!USBHostMSC.readBlocks(lba, buffer, blocks)) {
+    // Transient refusals happen right after enumeration; count them but do not shout per read.
+    if (++readErrors_ == 1) {
+      Serial.printf("[usb] first read failure at lba %u (blocks %u)\n", (unsigned)lba,
+                    (unsigned)blocks);
+    }
     return false;
   }
   return true;
@@ -166,13 +67,12 @@ bool IdfMsc::readBlocks(uint32_t lba, void* buffer, uint32_t blocks) {
 bool IdfMsc::rawRead(uint32_t lba) {
   uint8_t buf[512];
   memset(buf, 0xA5, sizeof buf);
-  const bool ok = readBlocks(lba, buf, 1);
+  const bool ok = USBHostMSC.mounted() ? USBHostMSC.readBlocks(lba, buf, 1) : false;
   int changed = 0;
   for (size_t i = 0; i < sizeof buf; i++) {
     if (buf[i] != 0xA5) changed++;
   }
   lastChanged_ = changed;
-  memcpy(lastData_, buf, sizeof lastData_);
   return ok;
 }
 

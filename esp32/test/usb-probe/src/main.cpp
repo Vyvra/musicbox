@@ -1,47 +1,32 @@
-// Can TinyUSB sustain MSC reads when they run in a dedicated task instead of the main loop?
-// Mounting through TinyUSB is proven; the failure was always in sustained reads.
+// Why do TinyUSB reads get refused? Log tuh_msc_ready() around each transfer, from a dedicated task.
+//
+// Mounting works reliably; reads return in microseconds, which looks like "not ready" rather than a
+// failed transfer. The core's USBHostMSC driver contains the endpoint-readiness wait and BOT
+// recovery, so it is used here rather than raw tuh_msc_read10().
 #include <Arduino.h>
 #include <USBHost.h>
+#include <USBHostMSC.h>
 
-static volatile bool mounted = false;
-static volatile uint8_t mscAddr = 0;
+// tuh_msc_mount_cb is owned by the core's USBHostMSC driver, so mount state is polled instead.
 
-extern "C" void tuh_msc_mount_cb(uint8_t d) { mscAddr = d; mounted = true; }
-extern "C" void tuh_msc_umount_cb(uint8_t d) { (void)d; mounted = false; }
+static void unusedReaderTask(void*) {
+  while (!USBHostMSC.mounted()) vTaskDelay(pdMS_TO_TICKS(50));
+  vTaskDelay(pdMS_TO_TICKS(300));           // let the unit settle after enumeration
 
-static void readerTask(void*) {
+  const uint8_t addr = USBHostMSC.devAddr();
+  Serial.printf("[r] task start addr=%u blocks=%u size=%u\n", (unsigned)addr,
+                (unsigned)USBHostMSC.blockCount(), (unsigned)USBHostMSC.blockSize());
+
   static uint8_t buf[512] __attribute__((aligned(32)));
-  int ok = 0, fail = 0;
-  while (!mounted || mscAddr == 0) vTaskDelay(50);      // wait for enumeration
-  vTaskDelay(200);                                      // let the unit settle
-  const uint32_t blocks = tuh_msc_get_block_count(mscAddr, 0);
-  Serial.printf("[read] task start, blocks=%u\n", (unsigned)blocks);
-
-  // 64 sequential sectors, one block per transfer
-  for (int i = 0; i < 64; i++) {
-    if (tuh_msc_read10(mscAddr, 0, buf, (uint32_t)i, 1, nullptr, 0)) ok++; else fail++;
-    vTaskDelay(1);
-  }
-  Serial.printf("[read] A: 64x1 block ok=%d fail=%d (LBA0 first bytes %02X %02X %02X %02X)\n", ok, fail,
-                buf[0], buf[1], buf[2], buf[3]);
-
-  // scattered reads across the volume
-  ok = fail = 0;
-  for (int i = 0; i < 32; i++) {
-    const uint32_t lba = 2048u + (uint32_t)i * 64u;
-    if (tuh_msc_read10(mscAddr, 0, buf, lba, 1, nullptr, 0)) ok++; else fail++;
-    vTaskDelay(1);
-  }
-  Serial.printf("[read] B: 32 scattered ok=%d fail=%d\n", ok, fail);
-
-  // multi-block bursts
-  ok = fail = 0;
   for (int i = 0; i < 8; i++) {
-    if (tuh_msc_read10(mscAddr, 0, buf, 2048u + (uint32_t)i * 8u, 8, nullptr, 0)) ok++; else fail++;
-    vTaskDelay(2);
+    const bool readyBefore = tuh_msc_ready(addr);
+    const bool ok = USBHostMSC.readBlocks(2048, buf, 1);
+    const bool readyAfter = tuh_msc_ready(addr);
+    Serial.printf("[r] %d: ok=%d ready before=%d after=%d  bytes %02X %02X %02X %02X\n", i, (int)ok,
+                  (int)readyBefore, (int)readyAfter, buf[0], buf[1], buf[2], buf[3]);
+    vTaskDelay(pdMS_TO_TICKS(250));
   }
-  Serial.printf("[read] C: 8x8 blocks ok=%d fail=%d\n", ok, fail);
-  Serial.println("[read] done");
+  Serial.println("[r] done");
   vTaskDelete(nullptr);
 }
 
@@ -50,14 +35,24 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.printf("[tusb] begin: %d\n", (int)USBHost.begin());
-  xTaskCreatePinnedToCore(readerTask, "reader", 16384, nullptr, 3, nullptr, 1);
+  // xTaskCreatePinnedToCore(unusedReaderTask, "reader", 16384, nullptr, 3, nullptr, 1);
 }
 
 void loop() {
   USBHost.task();
+
+  // Reads from the MAIN LOOP: this is exactly how the firmware's FAT layer would call them.
   static uint32_t last = 0;
-  if (millis() - last > 3000) {
+  if (millis() - last > 1500) {
     last = millis();
-    Serial.printf("[tusb] mounted=%d\n", (int)mounted);
+    if (USBHostMSC.mounted()) {
+      static uint8_t buf[512] __attribute__((aligned(32)));
+      const bool readyBefore = tuh_msc_ready(USBHostMSC.devAddr());
+      const bool ok = USBHostMSC.readBlocks(2048, buf, 1);
+      Serial.printf("[loop] ok=%d ready=%d bytes %02X %02X %02X %02X\n", (int)ok, (int)readyBefore,
+                    buf[0], buf[1], buf[2], buf[3]);
+    } else {
+      Serial.println("[loop] not mounted");
+    }
   }
 }
