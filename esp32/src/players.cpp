@@ -118,8 +118,19 @@ void LocalPlayer::poll() {
     if (audio.isRunning() && audio.getAudioFileDuration() > 0) {
       const uint16_t sec = pendingSeekSeconds_;
       if (audio.setAudioPlayTime(sec)) {
-        Serial.printf("[local] resumed at %us\n", (unsigned)sec);
-        pendingSeekSeconds_ = 0;
+        // The library returns true even when the seek does not take (measured: it then counts from
+        // 0), so verify rather than trusting the return value. Retry a couple of times - the first
+        // call often lands before the decoder has everything it needs.
+        const uint32_t after = audio.getAudioCurrentTime();
+        if (after + 5 >= sec || ++seekTries_ >= 3) {
+          Serial.printf("[local] resumed at %us (reported %us, try %d)\n", (unsigned)sec,
+                        (unsigned)after, (int)seekTries_);
+          pendingSeekSeconds_ = 0;
+          seekTries_ = 0;
+        } else {
+          Serial.printf("[local] seek to %us did not take (reported %us), retrying\n",
+                        (unsigned)sec, (unsigned)after);
+        }
       } else if ((int32_t)(millis() - seekDeadline_) >= 0) {
         Serial.printf("[local] gave up seeking to %us; playing from the start\n", (unsigned)sec);
         pendingSeekSeconds_ = 0;
