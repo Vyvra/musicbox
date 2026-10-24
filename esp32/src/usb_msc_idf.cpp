@@ -4,6 +4,9 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "soc/rtc_cntl_reg.h"
+#include "soc/periph_defs.h"
+#include "esp_private/periph_ctrl.h"
 #include "usb/usb_host.h"
 #include "usb/msc_host.h"
 #include "esp_private/msc_scsi_bot.h"
@@ -35,6 +38,18 @@ void IdfMsc::onEvent(int event, uint8_t address) {
 
 bool IdfMsc::begin() {
   if (installed_) return true;
+
+  // Reset the USB module before handing the PHY to the host library. After a USB download the ROM
+  // leaves DWC2/PHY in persist/USJ state, and in that state NOTHING enumerates until a pad/EN reset -
+  // which is exactly the "stick powered, LED blinks, but the bus stays empty" symptom. The Arduino
+  // core does this in its own host bring-up; usb_host_install() does not.
+#if defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3)
+  REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_IO_MUX_RESET_DISABLE);
+  REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_USB_RESET_DISABLE);
+  periph_module_reset(PERIPH_USB_MODULE);
+  periph_module_enable(PERIPH_USB_MODULE);
+  Serial.println("[msc] USB module reset before host install");
+#endif
 
   usb_host_config_t hostCfg = {};
   hostCfg.intr_flags = ESP_INTR_FLAG_LEVEL1;
