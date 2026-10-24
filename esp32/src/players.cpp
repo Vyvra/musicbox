@@ -109,37 +109,40 @@ void LocalPlayer::stop() {
   paused_ = false;
 }
 
-uint32_t LocalPlayer::positionSeconds() { return audio.getAudioCurrentTime(); }
+uint32_t LocalPlayer::positionSeconds() {
+  // After a byte-offset resume the decoder counts from 0, so the offset is added back.
+  return baseSeconds_ + audio.getAudioCurrentTime();
+}
 
 void LocalPlayer::poll() {
   audio.loop();
 
-  if (pendingSeekSeconds_ != 0) {
-    if (audio.isRunning() && audio.getAudioFileDuration() > 0) {
-      const uint16_t sec = pendingSeekSeconds_;
-      if (audio.setAudioPlayTime(sec)) {
-        // The library returns true even when the seek does not take (measured: it then counts from
-        // 0), so verify rather than trusting the return value. Retry a couple of times - the first
-        // call often lands before the decoder has everything it needs.
-        const uint32_t after = audio.getAudioCurrentTime();
-        if (after + 5 >= sec || ++seekTries_ >= 3) {
-          Serial.printf("[local] resumed at %us (reported %us, try %d)\n", (unsigned)sec,
-                        (unsigned)after, (int)seekTries_);
-          pendingSeekSeconds_ = 0;
-          seekTries_ = 0;
-        } else {
-          Serial.printf("[local] seek to %us did not take (reported %us), retrying\n",
-                        (unsigned)sec, (unsigned)after);
-        }
-      } else if ((int32_t)(millis() - seekDeadline_) >= 0) {
-        Serial.printf("[local] gave up seeking to %us; playing from the start\n", (unsigned)sec);
-        pendingSeekSeconds_ = 0;
-      }
-    } else if ((int32_t)(millis() - seekDeadline_) >= 0) {
-      Serial.printf("[local] stream never became ready; not seeking\n");
-      pendingSeekSeconds_ = 0;
+  // Resume by byte offset, not by time. setAudioPlayTime() reports success and then leaves the
+  // stream dead (measured repeatedly: position stays 0 for ever), whereas connecttoFS() accepts a
+  // starting byte. File size and duration give a good offset for both CBR and VBR files.
+  if (pendingSeekSeconds_ != 0 && audio.getAudioFileDuration() > 0 && audio.getFileSize() > 0) {
+    const uint16_t sec = pendingSeekSeconds_;
+    const uint32_t duration = audio.getAudioFileDuration();
+    const uint32_t size = audio.getFileSize();
+    pendingSeekSeconds_ = 0;
+    if (sec + 2 >= duration) {
+      finished_ = true;
+      return;
+    }
+    const uint32_t startByte = (uint32_t)((uint64_t)size * sec / duration);
+    const String path = tracks_[index_].path;
+    audio.stopSong();
+    if (audio.connecttoFS(fs_, path.c_str(), (int32_t)startByte)) {
+      baseSeconds_ = sec;
+      startedAt_ = millis();
+      Serial.printf("[local] resumed '%s' at %us (byte %u of %u)\n", path.c_str(), (unsigned)sec,
+                    (unsigned)startByte, (unsigned)size);
+    } else {
+      Serial.printf("[local] resume re-open failed for %s\n", path.c_str());
+      baseSeconds_ = 0;
     }
   }
+
   if (stopped_ || paused_ || finished_) return;
 
   bool ended = g_eof;
