@@ -68,3 +68,32 @@ From a dedicated 16 KB task on core 1, with the host worker pumped from the main
 All 104 reads returned within ~0.2 s, i.e. they were rejected immediately rather than timing out -
 consistent with TinyUSB reporting the MSC unit as not ready, and with only the first couple of
 transfers getting through. So mounting is solid and single-block reads are not, from any task.
+
+## Pure ESP-IDF build (the decisive test)
+
+`test/idf-msc` is a standalone ESP-IDF 5.5 project (platform `espressif32@6.12.0`, no Arduino in the
+image) with the official `usb_host_msc` component vendored under `components/`. Result:
+
+```
+[idf] USB module reset done
+[idf] usb_host_install: ESP_OK
+[idf] msc_host_install: ESP_OK
+[idf] connect event address: 0
+[idf] install_device(1..4): ESP_ERR_NOT_FOUND
+[idf] RESULT: no MSC device - IDF host cannot drive this port either
+```
+
+So Arduino's presence is **not** the cause: ESP-IDF's host stack does not enumerate this stick on this
+board under any configuration tried (with and without the RTC/peripheral USB module reset that the
+Arduino core performs, with and without the official MSC driver).
+
+⚠️ That test needs the older platform pinned: ESP-IDF 6.x no longer ships the `usb` component (it moved
+to the component manager), so `platform = espressif32@6.12.0` (IDF 5.5) is required for the vendored
+component to build.
+
+## Conclusion at this point
+
+TinyUSB is the only stack that enumerates here, so the storage path has to be TinyUSB, and the open bug
+is its refusal to read. The next experiment is narrow: call `USBHostMSC.readBlocks()` (the core's
+driver, which contains the endpoint-readiness wait and BOT recovery) from a dedicated task rather than
+from the loop, and instrument `tuh_msc_ready()` around each transfer to see why it reports not-ready.
