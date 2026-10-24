@@ -43,7 +43,10 @@ bool Controller::begin() {
   int startIndex = 0;
   float startSeconds = 0.0f;
   String rel;
-  if (store_.load(media_.identity, rel, startSeconds)) {
+  const bool hadResume = store_.load(media_.identity, rel, startSeconds);
+  Serial.printf("[resume] load identity='%s' -> %d ('%s' %.1fs)\n", media_.identity.c_str(),
+                (int)hadResume, rel.c_str(), startSeconds);
+  if (hadResume) {
     for (size_t i = 0; i < media_.tracks.size(); i++) {
       if (media_.tracks[i].rel == rel) { startIndex = (int)i; break; }
     }
@@ -108,12 +111,21 @@ void Controller::savePosition(bool force) {
   if (!backend_) return;
   if (backend_->kind()[0] != 'l') return;                    // spotify: nothing to save
   if (!force && millis() - lastSave_ < SAVE_INTERVAL_MS) return;
+  lastSave_ = millis();
 
   int i = backend_->index();
   if (i < 0 || i >= (int)media_.tracks.size()) return;
-  store_.save(media_.identity, media_.tracks[i].rel,
-              (float)backend_->positionSeconds());
-  lastSave_ = millis();
+  const float secs = (float)backend_->positionSeconds();
+  Serial.printf("[resume] save identity='%s' track='%s' %.1fs (force=%d)\n",
+                media_.identity.c_str(), media_.tracks[i].rel.c_str(), secs, (int)force);
+  // After a yank the decoder has already lost its file and reports 0; writing that would throw away
+  // the checkpoint we actually want. Only a real position is worth storing.
+  if (secs <= 0.0f && !force) return;
+  if (secs <= 0.0f) {
+    Serial.println("[resume]   not saving 0s (the previous checkpoint stands)");
+    return;
+  }
+  store_.save(media_.identity, media_.tracks[i].rel, secs);
 }
 
 // ------------------------------------------------------------------ control surface

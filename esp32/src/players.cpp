@@ -61,11 +61,12 @@ void LocalPlayer::playCurrent(float startSeconds) {
     return;
   }
   Serial.printf("[local] opened %s\n", path.c_str());
+  // Deferred: at this instant the decoder knows nothing about the stream, so setAudioPlayTime()
+  // fails. poll() retries once the audio is running.
   if (startSeconds > RESUME_MIN_SECONDS) {
-    uint16_t sec = (uint16_t)startSeconds;
-    if (!audio.setAudioPlayTime(sec)) {
-      Serial.printf("[local] could not seek to %us; playing from the start\n", sec);
-    }
+    pendingSeekSeconds_ = (uint16_t)startSeconds;
+    seekDeadline_ = millis() + 15000;
+    Serial.printf("[local] will seek to %us once decoding starts\n", (unsigned)pendingSeekSeconds_);
   }
   startedAt_ = millis();
 }
@@ -112,6 +113,22 @@ uint32_t LocalPlayer::positionSeconds() { return audio.getAudioCurrentTime(); }
 
 void LocalPlayer::poll() {
   audio.loop();
+
+  if (pendingSeekSeconds_ != 0) {
+    if (audio.isRunning() && audio.getAudioFileDuration() > 0) {
+      const uint16_t sec = pendingSeekSeconds_;
+      if (audio.setAudioPlayTime(sec)) {
+        Serial.printf("[local] resumed at %us\n", (unsigned)sec);
+        pendingSeekSeconds_ = 0;
+      } else if ((int32_t)(millis() - seekDeadline_) >= 0) {
+        Serial.printf("[local] gave up seeking to %us; playing from the start\n", (unsigned)sec);
+        pendingSeekSeconds_ = 0;
+      }
+    } else if ((int32_t)(millis() - seekDeadline_) >= 0) {
+      Serial.printf("[local] stream never became ready; not seeking\n");
+      pendingSeekSeconds_ = 0;
+    }
+  }
   if (stopped_ || paused_ || finished_) return;
 
   bool ended = g_eof;

@@ -39,6 +39,10 @@ class LocalPlayer : public MediaBackend {
   void     previous() override;
   void     stop() override;
   uint32_t positionSeconds() override;
+  // Seeking needs the decoder's header, which is only parsed after connecttoFS returns,
+  // so a resume seek is deferred until the stream is actually running.
+  uint16_t pendingSeekSeconds_ = 0;
+  uint32_t seekDeadline_ = 0;
   int      index() const override { return index_; }
   bool     finished() override { return finished_; }
   void     poll() override;
