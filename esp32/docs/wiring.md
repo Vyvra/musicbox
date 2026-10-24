@@ -141,3 +141,28 @@ data problem and is not one. A 300 Hz square wave carries strong harmonics and i
 **Verified on hardware (2026-10-23):** I2S on BCLK 4 / LRC 5 / DIN 6 into a MAX98357A fed from
 **3V3** produces a clear buzz, with no resets - so the amp's peaks are within what the 3V3 regulator
 supplies at this level.
+
+## Bring-up results (2026-10-23, verified on the board)
+
+| stage | evidence |
+| --- | --- |
+| hand-written I2S square wave | clean buzz, amp on **3V3**, no resets |
+| **ESP32-audioI2S library, WAV then MP3** | **real music played** (a 90 s excerpt from flash) |
+
+The whole audio path is therefore proven: decoder → library's I2S setup → MAX98357A → speaker.
+
+### Lessons worth keeping
+
+- **A crackle that appears and disappears as the board is handled is a connection, not firmware.**
+  Considerable time went into suspecting the library's 32-bit I2S slots (it hardcodes
+  `I2S_DATA_BIT_WIDTH_32BIT`), including a test that cycled frame formats. The tell that should
+  have stopped it earlier: the *control* variant — the exact code that had just played a clean
+  buzz — had started crackling too. A control that changes behaviour without changing code means
+  the hardware state moved, and everything measured after that is fiction.
+- **32-bit Philips slots are fine with the MAX98357A.** No library patch was needed; do not
+  "fix" the slot width.
+- **A marginal USB cable can present as a silent serial console while flashing still works**
+  (esptool retries; the app's UART output does not). If the console goes quiet for no reason,
+  suspect the cable before the firmware.
+- **The SPIFFS partition is a test fixture, not the plan.** It is there because the USB host path
+  is still broken; it is what allowed the audio chain to be proven without a working stick.
