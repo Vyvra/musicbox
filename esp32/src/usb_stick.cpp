@@ -80,7 +80,21 @@ bool UsbStick::probe() {
   fat::BlockReader reader = [](uint32_t lba, uint8_t* buffer, uint32_t count) -> bool {
     // The core's driver waits for endpoint readiness and recovers from BOT errors; calling
     // tuh_msc_read10 directly skipped both and failed on a stick that was still settling.
-    return USBHostMSC.readBlocks(lba, buffer, count);
+    //
+    // Reads go through an aligned bounce buffer. TinyUSB hands the caller's buffer straight to the
+    // DWC2 DMA engine, and a stack array is only byte-aligned: the transfer then completes "success
+    // fully" while the data lands somewhere else, which is exactly what an all-zero boot sector with
+    // a stray signature looks like. Chunking also bounds the bounce buffer's size.
+    static uint8_t __attribute__((aligned(32))) bounce[512 * 8];
+    const uint32_t chunkBlocks = sizeof(bounce) / 512;
+    uint32_t done = 0;
+    while (done < count) {
+      const uint32_t n = (count - done < chunkBlocks) ? (count - done) : chunkBlocks;
+      if (!USBHostMSC.readBlocks(lba + done, bounce, n)) return false;
+      memcpy(buffer + (size_t)done * 512, bounce, (size_t)n * 512);
+      done += n;
+    }
+    return true;
   };
 
   if (!storage_.mount(reader)) {
@@ -132,7 +146,21 @@ void UsbStick::describeFailure() {
   fat::BlockReader reader = [](uint32_t lba, uint8_t* buffer, uint32_t count) -> bool {
     // The core's driver waits for endpoint readiness and recovers from BOT errors; calling
     // tuh_msc_read10 directly skipped both and failed on a stick that was still settling.
-    return USBHostMSC.readBlocks(lba, buffer, count);
+    //
+    // Reads go through an aligned bounce buffer. TinyUSB hands the caller's buffer straight to the
+    // DWC2 DMA engine, and a stack array is only byte-aligned: the transfer then completes "success
+    // fully" while the data lands somewhere else, which is exactly what an all-zero boot sector with
+    // a stray signature looks like. Chunking also bounds the bounce buffer's size.
+    static uint8_t __attribute__((aligned(32))) bounce[512 * 8];
+    const uint32_t chunkBlocks = sizeof(bounce) / 512;
+    uint32_t done = 0;
+    while (done < count) {
+      const uint32_t n = (count - done < chunkBlocks) ? (count - done) : chunkBlocks;
+      if (!USBHostMSC.readBlocks(lba + done, bounce, n)) return false;
+      memcpy(buffer + (size_t)done * 512, bounce, (size_t)n * 512);
+      done += n;
+    }
+    return true;
   };
 
   uint8_t boot[512] = {};
