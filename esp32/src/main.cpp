@@ -220,23 +220,34 @@ void loop() {
 
   const bool mounted = mbx::usbStick.mounted();
 
-  // Self-heal a wedged host controller. Pulling the stick mid-transfer can leave TinyUSB's MSC
-  // state stuck: the removal is noticed, but the stick never re-enumerates when it comes back, and
-  // only a reboot recovers it. Reboot deliberately, once per removal, rather than sitting silent
-  // until someone power-cycles the box.
-  static bool hadMount = false;
+  // Self-heal a wedged host controller: a bus reset from an MCU restart often re-enumerates a stick
+  // that a half-finished transfer left confused, so the box restarts itself rather than sitting
+  // silent. Bounded to three attempts per mount, and the counters live in RTC memory because a
+  // restart would otherwise forget that we were already trying.
+  static RTC_DATA_ATTR uint8_t rtcRestarts = 0;
+  static RTC_DATA_ATTR bool rtcRecovering = false;
   static uint32_t absentSince = 0;
+
   if (mounted) {
-    hadMount = true;
+    rtcRestarts = 0;
+    rtcRecovering = false;
     absentSince = 0;
-  } else if (hadMount && absentSince == 0) {
-    absentSince = millis();
-  } else if (hadMount && absentSince != 0 && millis() - absentSince > 20000) {
-    Serial.println("[box] stick has not come back after 20s - restarting to reset the USB host");
-    Serial.flush();
-    delay(200);
-    esp_restart();
+  } else if (box != nullptr || rtcRecovering) {
+    // A stick was playing and has gone (this boot, or just before a restart).
+    rtcRecovering = true;
+    if (absentSince == 0) absentSince = millis();
+    if (millis() - absentSince > 10000 && rtcRestarts < 3) {
+      rtcRestarts++;
+      Serial.printf("[box] restarting to reset the USB host (attempt %u/3)\n", (unsigned)rtcRestarts);
+      Serial.flush();
+      delay(100);
+      esp_restart();
+    } else if (millis() - absentSince > 15000 && rtcRestarts >= 3) {
+      Serial.println("[box] USB host did not recover after 3 restarts; unplug the stick to clear it");
+      rtcRecovering = false;   // stop trying until a stick mounts again
+    }
   }
+
   if (mounted && box == nullptr) {
     setLed(LedState::Mounted);
     maybeProvision();          // a config stick provisions and may also carry music
