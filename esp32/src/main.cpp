@@ -209,8 +209,9 @@ void loop() {
   static uint32_t last_beat = 0;
   if (HEARTBEAT_MS > 0 && millis() - last_beat > HEARTBEAT_MS) {
     last_beat = millis();
-    Serial.printf("[hb] alive %lus  rx %lu  inited=%d active=%d  %s\n",
+    Serial.printf("[hb] alive %lus  rx %lu  heap=%u min=%u  inited=%d active=%d  %s\n",
                   (unsigned long)(millis() / 1000), (unsigned long)rx_bytes,
+                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
                   (int)mbx::usbStick.hostInited(), (int)mbx::usbStick.portActive(),
                   mbx::usbStick.describe().c_str());
     Serial.flush();

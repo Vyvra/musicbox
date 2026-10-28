@@ -60,7 +60,7 @@ void LocalPlayer::playCurrent(float startSeconds) {
     Serial.printf("[local] connecttoFS FAILED for %s\n", path.c_str());
     return;
   }
-  Serial.printf("[local] opened %s\n", path.c_str());
+  Serial.printf("[local] opened %s (heap=%u)\n", path.c_str(), (unsigned)ESP.getFreeHeap());
   // Deferred: at this instant the decoder knows nothing about the stream, so setAudioPlayTime()
   // fails. poll() retries once the audio is running.
   if (startSeconds > RESUME_MIN_SECONDS) {
